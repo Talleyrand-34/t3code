@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A T3 Code server on a home network usually speaks plain HTTP, so cleartext has
+  to be allowed for the addresses a user types in. CAs the user installs
+  themselves are trusted, which is what a server with its own certificate
+  authority needs.
+-->
+<network-security-config>
+  <base-config cleartextTrafficPermitted="true">
+    <trust-anchors>
+      <certificates src="system" />
+      <certificates src="user" />
+    </trust-anchors>
+  </base-config>
+</network-security-config>
