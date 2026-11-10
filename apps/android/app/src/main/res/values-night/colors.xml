@@ -1,0 +1,4 @@
+<resources>
+  <!-- Kept in step with PeerPalette.screen in ui/Theme.kt. -->
+  <color name="peer_screen">#0A0A0A</color>
+</resources>

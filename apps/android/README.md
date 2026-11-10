@@ -17,6 +17,7 @@ one connection, lists the server's threads, opens one, and sends messages.
 - Send a message and let the server run the turn.
 - Stay connected: the session is kept, a dropped socket reconnects on its own,
   and a host that goes away is noticed.
+- Paint itself light, dark, or follow the system, from the settings sheet.
 
 ## What it does not do
 
@@ -44,9 +45,10 @@ t3 pair
 It prints a link such as `http://192.168.1.20:3923/#token=abc123`. Scan it, or
 paste it into the app's **Server address** field — the code comes with it.
 
-The host also prints an app link, `t3code://pair?pairingUrl=…`. This app
-registers that scheme, so opening the link on the phone fills the form in and
-connects.
+The host also prints an app link for each client. This app registers
+`t3peer://pair?pairingUrl=…`; the full mobile app registers `t3code://`, so a
+phone with both installed still opens the right one. Opening the link fills the
+form in and connects.
 
 The code works once. What the phone keeps afterwards is the session it granted,
 which is good for a month, so the app comes back on its own the next morning.

@@ -7,6 +7,7 @@ data class ThreadSummary(
   val title: String,
   val projectId: String,
   val projectTitle: String,
+  val branch: String,
   val status: String,
   val updatedAt: String,
 )
@@ -28,6 +29,7 @@ object PeerParsing {
       title = shell.optString("title").ifEmpty { "Untitled" },
       projectId = projectId,
       projectTitle = projectTitles[projectId] ?: projectId,
+      branch = if (shell.isNull("branch")) "" else shell.optString("branch"),
       status = shell.optString("status"),
       updatedAt = shell.optString("updatedAt"),
     )

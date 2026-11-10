@@ -57,6 +57,9 @@ dependencies {
   implementation(libs.androidx.compose.material.icons)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.okhttp)
+  implementation(libs.androidx.security.crypto)
+
+  testImplementation(libs.junit)
 
   debugImplementation(libs.androidx.compose.ui.tooling)
 }

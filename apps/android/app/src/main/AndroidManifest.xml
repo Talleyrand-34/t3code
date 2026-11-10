@@ -2,7 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
   <uses-permission android:name="android.permission.INTERNET" />
-  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
   <application
     android:allowBackup="false"
@@ -22,12 +21,14 @@
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
-      <!-- A pairing link opens the app and fills in the server and code. -->
+      <!-- A pairing link opens the app and fills in the server and code. The peer client
+           uses its own scheme: the full mobile app already claims t3code://, and two apps
+           claiming one scheme makes the link an ambiguous chooser. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
-        <data android:scheme="t3code" />
+        <data android:scheme="t3peer" />
       </intent-filter>
     </activity>
   </application>

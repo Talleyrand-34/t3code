@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.t3tools.peer.data.PeerStore
 import com.t3tools.peer.model.ChatLine
 import com.t3tools.peer.model.ChatRole
+import com.t3tools.peer.model.PeerAppearance
 import com.t3tools.peer.model.PeerParsing
 import com.t3tools.peer.model.ThreadSummary
 import com.t3tools.peer.net.PeerEndpoint
@@ -41,6 +42,8 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   var lines by mutableStateOf(emptyList<ChatLine>())
     private set
   var composer by mutableStateOf("")
+  var appearance by mutableStateOf(store.appearance)
+  var settingsVisible by mutableStateOf(false)
 
   private var session: PeerSession? = null
   private var threadStream: Int? = null
@@ -60,6 +63,19 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
 
   fun dismissError() {
     error = null
+  }
+
+  fun chooseAppearance(value: PeerAppearance) {
+    appearance = value
+    store.appearance = value
+  }
+
+  fun showSettings() {
+    settingsVisible = true
+  }
+
+  fun hideSettings() {
+    settingsVisible = false
   }
 
   /**
@@ -111,6 +127,15 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     lineStore.clear()
     environmentLabel = ""
     screen = PeerScreen.CONNECT
+  }
+
+  /**
+   * Drops the session the host granted, so the app stops reconnecting on its own and
+   * needs a new pairing code.
+   */
+  fun forgetServer() {
+    disconnect()
+    store.forgetSession()
   }
 
   fun openThread(thread: ThreadSummary) {

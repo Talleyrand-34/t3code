@@ -1,0 +1,10 @@
+<resources>
+  <!-- Android 12 and later draw a splash screen; it follows the system tone. -->
+  <style name="Theme.T3Peer" parent="android:Theme.Material.Light.NoActionBar">
+    <item name="android:windowBackground">@color/peer_screen</item>
+    <item name="android:colorBackground">@color/peer_screen</item>
+    <item name="android:statusBarColor">@android:color/transparent</item>
+    <item name="android:navigationBarColor">@android:color/transparent</item>
+    <item name="android:windowSplashScreenBackground">@color/peer_screen</item>
+  </style>
+</resources>
