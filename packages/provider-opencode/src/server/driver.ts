@@ -24,7 +24,11 @@ import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAda
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { ProviderDriverError } from "@t3tools/provider-core/server/errors";
 import { openCodeUsageReader, type OpenCodeUsageReaderEnv } from "./usage.ts";
-import { readOpenCodeGoUsageLimits } from "./usageLimits.ts";
+import {
+  mergeUsageLimits,
+  readOpenCodeGoUsageLimits,
+  readOpenCodeIntegrationUsageLimits,
+} from "./usageLimits.ts";
 import { loadOpenCode2Catalog } from "./openCode2Catalog.ts";
 import {
   checkOpenCodeProviderStatus,
@@ -363,6 +367,17 @@ export const OpenCodeDriver: ProviderDriver<
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.provideService(Digest.Digest, digest),
     );
+    // A custom provider meters its own plan, so its quota has to be read from
+    // that provider rather than from the OpenCode Console budget.
+    const checkIntegrationUsageLimits = readOpenCodeIntegrationUsageLimits({
+      enabled: effectiveConfig.enabled,
+      serverUrl: effectiveConfig.serverUrl,
+      environment: processEnv,
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, pathService),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    );
     const checkProvider = Effect.all(
       {
         provider: checkOpenCodeProviderStatus(
@@ -375,10 +390,14 @@ export const OpenCodeDriver: ProviderDriver<
           Effect.annotateSpans({ providerInstanceId: instanceId }),
         ),
         usageLimits: checkUsageLimits,
+        integrationUsageLimits: checkIntegrationUsageLimits,
       },
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.map(({ provider, usageLimits }) => ({ ...provider, usageLimits })),
+      Effect.map(({ provider, usageLimits, integrationUsageLimits }) => ({
+        ...provider,
+        usageLimits: mergeUsageLimits(usageLimits, integrationUsageLimits.windows),
+      })),
       Effect.map(stampIdentity),
       Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
       Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),

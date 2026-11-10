@@ -70,11 +70,17 @@ const layer = Layer.mergeAll(
   Layer.succeed(OpenCodeRuntime.OpenCodeRuntime, openCode2Runtime),
 ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
-const create = (config: Partial<OpenCodeSettings>, http: HttpClient.HttpClient) =>
+const create = (
+  config: Partial<OpenCodeSettings>,
+  http: HttpClient.HttpClient,
+  environment: NodeJS.ProcessEnv = {},
+) =>
   OpenCodeDriver.create({
     instanceId: ProviderInstanceId.make("opencode-test"),
     displayName: undefined,
-    environment: [],
+    environment: Object.entries(environment).flatMap(([name, value]) =>
+      value === undefined ? [] : [{ name, value, sensitive: false }],
+    ),
     enabled: true,
     config: { ...OpenCodeDriver.defaultConfig(), ...config },
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));
@@ -665,7 +671,11 @@ it.layer(layerUpdate)("OpenCodeDriver updates", (it) => {
     () =>
       Effect.gen(function* () {
         versionOutput.current = "1.18.18\n";
-        const instance = yield* create({}, noHttp);
+        // Sandbox HOME so the provider cannot read the developer's own OpenCode
+        // store, whose credentials would send the provider's quota probe out.
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-driver-home-" });
+        const instance = yield* create({}, noHttp, { HOME: home });
         // Let the startup status check claim the refresh permit, then wait behind it so it
         // cannot probe after the upgrade below.
         yield* Effect.yieldNow;
