@@ -75,7 +75,9 @@ interface MiniMaxQuotaEntry {
   readonly current_interval_remaining_percent?: number;
   readonly current_interval_status?: number;
   readonly end_time?: number;
+  readonly start_time?: number;
   readonly weekly_end_time?: number;
+  readonly weekly_start_time?: number;
   readonly current_weekly_remaining_percent?: number;
   readonly current_weekly_status?: number;
 }
@@ -85,7 +87,9 @@ const miniMaxQuotaEntry = Schema.decodeUnknownOption(
     current_interval_remaining_percent: Schema.optionalKey(Schema.Finite),
     current_interval_status: Schema.optionalKey(Schema.Finite),
     end_time: Schema.optionalKey(Schema.Finite),
+    start_time: Schema.optionalKey(Schema.Finite),
     weekly_end_time: Schema.optionalKey(Schema.Finite),
+    weekly_start_time: Schema.optionalKey(Schema.Finite),
     current_weekly_remaining_percent: Schema.optionalKey(Schema.Finite),
     current_weekly_status: Schema.optionalKey(Schema.Finite),
   }),
@@ -176,6 +180,7 @@ const miniMaxWindow = (
   remainingPercent: number | undefined,
   statusCode: number | undefined,
   resetsAtMs: number | undefined,
+  startsAtMs: number | undefined,
 ): ServerProviderUsageWindow | null => {
   if (remainingPercent === undefined) return null;
   // MiniMax reports 1 normal, 2 exhausted and 3 unlimited.
@@ -185,11 +190,22 @@ const miniMaxWindow = (
     resetsAtMs !== undefined && Number.isFinite(resetsAtMs)
       ? Option.getOrUndefined(DateTime.make(resetsAtMs))
       : undefined;
+  // The window length is what lets the client judge pace, so take it from the
+  // window's own bounds.
+  const windowDurationMins =
+    startsAtMs !== undefined &&
+    resetsAtMs !== undefined &&
+    Number.isFinite(startsAtMs) &&
+    Number.isFinite(resetsAtMs) &&
+    resetsAtMs > startsAtMs
+      ? Math.round((resetsAtMs - startsAtMs) / 60_000)
+      : undefined;
   return {
     id: `${integrationId}_${id}`,
     kind,
     label: `${label} · ${kind === "session" ? "Interval" : "Weekly"}`,
     usedPercent,
+    ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
     ...(resetsAt ? { resetsAt: DateTime.formatIso(resetsAt) } : {}),
   };
 };
@@ -259,6 +275,7 @@ export const readOpenCodeIntegrationUsageLimits = Effect.fn("readOpenCodeIntegra
             entry.current_interval_remaining_percent,
             entry.current_interval_status,
             entry.end_time,
+            entry.start_time,
           );
           const weekly = miniMaxWindow(
             integrationId,
@@ -268,6 +285,7 @@ export const readOpenCodeIntegrationUsageLimits = Effect.fn("readOpenCodeIntegra
             entry.current_weekly_remaining_percent,
             entry.current_weekly_status,
             entry.weekly_end_time,
+            entry.weekly_start_time,
           );
           if (interval !== null) windows.push(interval);
           if (weekly !== null) windows.push(weekly);
