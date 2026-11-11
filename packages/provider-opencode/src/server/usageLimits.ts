@@ -278,6 +278,7 @@ export const readOpenCodeIntegrationUsageLimits = Effect.fn("readOpenCodeIntegra
         const result = response.value;
         if (result.status !== 200) continue;
         const body = yield* HttpClientResponse.schemaBodyJson(MiniMaxQuotaResponse)(result).pipe(
+          Effect.timeout("5 seconds"),
           Effect.option,
         );
         if (Option.isNone(body)) continue;

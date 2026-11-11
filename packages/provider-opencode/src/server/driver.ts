@@ -357,7 +357,7 @@ export const OpenCodeDriver: ProviderDriver<
       ),
     );
 
-    const checkUsageLimits = readOpenCodeGoUsageLimits({
+    const checkConsoleUsageLimits = readOpenCodeGoUsageLimits({
       enabled: effectiveConfig.enabled,
       serverUrl: effectiveConfig.serverUrl,
       environment: processEnv,
@@ -378,6 +378,14 @@ export const OpenCodeDriver: ProviderDriver<
       Effect.provideService(Path.Path, pathService),
       Effect.provideService(HttpClient.HttpClient, httpClient),
     );
+    // One probe for the provider's limits, so the recovery that retries a
+    // failed read retries the Console budget and the integration quotas alike.
+    const checkUsageLimits = Effect.zipWith(
+      checkConsoleUsageLimits,
+      checkIntegrationUsageLimits,
+      (usageLimits, integration) => mergeUsageLimits(usageLimits, integration.windows),
+      { concurrent: true },
+    );
     const checkProvider = Effect.all(
       {
         provider: checkOpenCodeProviderStatus(
@@ -390,13 +398,12 @@ export const OpenCodeDriver: ProviderDriver<
           Effect.annotateSpans({ providerInstanceId: instanceId }),
         ),
         usageLimits: checkUsageLimits,
-        integrationUsageLimits: checkIntegrationUsageLimits,
       },
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.map(({ provider, usageLimits, integrationUsageLimits }) => ({
+      Effect.map(({ provider, usageLimits }) => ({
         ...provider,
-        usageLimits: mergeUsageLimits(usageLimits, integrationUsageLimits.windows),
+        usageLimits,
       })),
       Effect.map(stampIdentity),
       Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
