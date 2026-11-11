@@ -1,6 +1,7 @@
 package com.t3tools.peer.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.t3tools.peer.model.PeerAppearance
@@ -26,15 +27,15 @@ class PeerStore(context: Context) {
 
   var serverInput: String
     get() = preferences.getString(SERVER_KEY, "").orEmpty()
-    set(value) = preferences.edit().putString(SERVER_KEY, value.trim()).apply()
+    set(value) = commit { putString(SERVER_KEY, value.trim()) }
 
   /** The bearer session for [serverInput], or null when there is none. */
   var bearerToken: String?
     get() = preferences.getString(TOKEN_KEY, null)
     set(value) {
-      preferences.edit().apply {
+      commit {
         if (value.isNullOrBlank()) remove(TOKEN_KEY) else putString(TOKEN_KEY, value)
-      }.apply()
+      }
     }
 
   fun forgetSession() {
@@ -44,7 +45,15 @@ class PeerStore(context: Context) {
   /** How the app paints itself. */
   var appearance: PeerAppearance
     get() = PeerAppearance.fromStorage(preferences.getString(APPEARANCE_KEY, null))
-    set(value) = preferences.edit().putString(APPEARANCE_KEY, value.storageValue).apply()
+    set(value) = commit { putString(APPEARANCE_KEY, value.storageValue) }
+
+  /**
+   * Writes straight to disk. An update force-stops the app, and a write still
+   * waiting in the queue would go with it, taking the pairing with it.
+   */
+  private inline fun commit(write: SharedPreferences.Editor.() -> Unit) {
+    preferences.edit().apply(write).commit()
+  }
 
   private companion object {
     const val SERVER_KEY = "server"

@@ -223,6 +223,19 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     threadStream = session?.subscribeThread(thread.id, ::onThreadItem)
   }
 
+  /** Leaves the thread and shows the list again, the way the back button does. */
+  fun backToThreads() {
+    openThread = null
+    lineStore.clear()
+    runStore.clear()
+    messageStore.clear()
+    subagentStore.clear()
+    lines = emptyList()
+    subagents = emptyList()
+    screen = PeerScreen.THREADS
+    closeThreadStream()
+  }
+
   /** The old thread must stop streaming, or its items land in the new one. */
   private fun closeThreadStream() {
     threadStream?.let { session?.unsubscribe(it) }

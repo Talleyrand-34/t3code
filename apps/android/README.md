@@ -73,6 +73,11 @@ The APK lands in `app/build/outputs/apk/debug/app-debug.apk`. Install it with
 `adb install -r app/build/outputs/apk/debug/app-debug.apk`, or copy it to the
 phone and open it there.
 
+The `-r` matters: it replaces the app instead of removing it first, so the
+pairing survives the update. The one thing that does clear the pairing is
+removing the app, which Android also demands when the new APK is signed with a
+different key.
+
 ## How the connection works
 
 Three steps, all of them between the phone and the server:

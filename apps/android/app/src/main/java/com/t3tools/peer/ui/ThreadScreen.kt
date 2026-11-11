@@ -1,5 +1,6 @@
 package com.t3tools.peer.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -57,7 +58,9 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
   val listState = rememberLazyListState()
   val lines = viewModel.lines
   val imeVisible = WindowInsets.isImeVisible
-  val activity = hostActivity()
+
+  // The system back button leaves the thread for the list, like the arrow does.
+  BackHandler { viewModel.backToThreads() }
 
   LaunchedEffect(lines.size, imeVisible) {
     if (lines.isEmpty()) return@LaunchedEffect
@@ -74,8 +77,8 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
         title = viewModel.openThread?.title ?: "Thread",
         subtitle = viewModel.openThread?.projectTitle.orEmpty(),
         branch = viewModel.openThread?.branch.orEmpty(),
-        // The back button leaves the app, the way the system button does.
-        onBack = { activity?.finish() },
+        // Back leaves the thread for the list, the way it always did.
+        onBack = viewModel::backToThreads,
         onBranch = viewModel::showBranches,
       )
       SubagentList(viewModel.subagents)
