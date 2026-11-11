@@ -124,7 +124,7 @@ private fun Header(environmentLabel: String, onDisconnect: () -> Unit, onSetting
 @Composable
 private fun ThreadRow(thread: ThreadSummary, onOpen: () -> Unit) {
   val palette = LocalPeerPalette.current
-  val status = statusLabel(thread.status)
+  val status = statusLabel(thread.status) ?: if (justFinished(thread.latestRunCompletedAt)) "Finished" else null
   Column(
     modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 20.dp, vertical = 9.dp),
     verticalArrangement = Arrangement.spacedBy(3.dp),
@@ -163,8 +163,7 @@ private fun ThreadRow(thread: ThreadSummary, onOpen: () -> Unit) {
           color = statusColor(thread.status, palette),
           modifier = Modifier.padding(top = 3.dp),
         )
-      }
-    }
+      }    }
     if (thread.branch.isNotEmpty()) {
       Text(
         thread.branch,
@@ -180,7 +179,7 @@ private fun ThreadRow(thread: ThreadSummary, onOpen: () -> Unit) {
 private fun statusColor(status: String, palette: PeerPalette) =
   when (status) {
     "waiting", "failed" -> palette.danger
-    "interrupted", "cancelled" -> palette.muted
+    "interrupted", "cancelled", "idle" -> palette.muted
     else -> palette.primary
   }
 

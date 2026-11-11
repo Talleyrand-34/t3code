@@ -57,6 +57,7 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
   val listState = rememberLazyListState()
   val lines = viewModel.lines
   val imeVisible = WindowInsets.isImeVisible
+  val activity = hostActivity()
 
   LaunchedEffect(lines.size, imeVisible) {
     if (lines.isEmpty()) return@LaunchedEffect
@@ -72,8 +73,12 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
       ThreadHeader(
         title = viewModel.openThread?.title ?: "Thread",
         subtitle = viewModel.openThread?.projectTitle.orEmpty(),
-        onBack = viewModel::backToThreads,
+        branch = viewModel.openThread?.branch.orEmpty(),
+        // The back button leaves the app, the way the system button does.
+        onBack = { activity?.finish() },
+        onBranch = viewModel::showBranches,
       )
+      SubagentList(viewModel.subagents)
       LazyColumn(
         state = listState,
         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -89,10 +94,19 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
       )
     }
   }
+  if (viewModel.branchSheetVisible) {
+    BranchSheet(viewModel)
+  }
 }
 
 @Composable
-private fun ThreadHeader(title: String, subtitle: String, onBack: () -> Unit) {
+private fun ThreadHeader(
+  title: String,
+  subtitle: String,
+  branch: String,
+  onBack: () -> Unit,
+  onBranch: () -> Unit,
+) {
   val palette = LocalPeerPalette.current
   Row(
     modifier =
@@ -125,6 +139,16 @@ private fun ThreadHeader(title: String, subtitle: String, onBack: () -> Unit) {
         )
       }
     }
+    if (branch.isNotEmpty()) {
+      Text(
+        branch,
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.primary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.clickable(onClick = onBranch).padding(horizontal = 6.dp, vertical = 4.dp),
+      )
+    }
   }
 }
 
@@ -134,15 +158,24 @@ private fun LineRow(line: ChatLine) {
   when (line.role) {
     ChatRole.USER ->
       Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        if (line.pending) {
+          // The server has it, but no run has started it yet.
+          Text(
+            "Queued",
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.muted,
+            modifier = Modifier.padding(end = 4.dp, bottom = 2.dp),
+          )
+        }
         Box(
           modifier = Modifier
             .clip(RoundedCornerShape(16.dp))
-            .background(palette.userBubble)
+            .background(if (line.pending) palette.grouped else palette.userBubble)
             .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
           MarkdownText(
             text = line.text,
-            color = palette.onUserBubble,
+            color = if (line.pending) palette.muted else palette.onUserBubble,
             fontSizeSp = 15f,
             lineHeightSp = 21f,
             codeBackground = palette.grouped,

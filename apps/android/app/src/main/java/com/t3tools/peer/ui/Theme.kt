@@ -1,8 +1,5 @@
 package com.t3tools.peer.ui
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -152,10 +149,3 @@ fun PeerSystemBars(dark: Boolean) {
     }
   }
 }
-
-private tailrec fun Context.findActivity(): Activity? =
-  when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-  }

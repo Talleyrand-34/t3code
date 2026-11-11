@@ -14,10 +14,13 @@ one connection, lists the server's threads, opens one, and sends messages.
   link with the app.
 - List the threads on that server, with their project and state.
 - Open a thread, read it, and watch it fill while the agent works.
+- See the messages the server took but has not run yet, and the subagents of
+  the thread you are in.
 - Send a message and let the server run the turn.
 - Stay connected: the session is kept, a dropped socket reconnects on its own,
   and a host that goes away is noticed.
 - Paint itself light, dark, or follow the system, from the settings sheet.
+- Move the thread to another branch, from the branch in its header.
 
 ## What it does not do
 

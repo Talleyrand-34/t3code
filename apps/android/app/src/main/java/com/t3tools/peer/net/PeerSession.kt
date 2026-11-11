@@ -1,5 +1,6 @@
 package com.t3tools.peer.net
 
+import com.t3tools.peer.model.BranchRef
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import okhttp3.OkHttpClient
@@ -53,11 +54,63 @@ class PeerSession private constructor(
     socket.call(PeerProtocol.METHOD_DISPATCH_COMMAND, command)
   }
 
+  /** The branches and tags the host knows about in a checkout. */
+  suspend fun listRefs(cwd: String): List<BranchRef> {
+    val result =
+      socket.call(
+        PeerProtocol.METHOD_VCS_LIST_REFS,
+        JSONObject().put("cwd", cwd).put("refKind", "all").put("limit", LIST_REFS_LIMIT),
+      )
+    val refs = result.optJSONArray("refs") ?: return emptyList()
+    val parsed = mutableListOf<BranchRef>()
+    for (index in 0 until refs.length()) {
+      val ref = refs.optJSONObject(index) ?: continue
+      val name = ref.optString("name")
+      if (name.isEmpty()) continue
+      parsed +=
+        BranchRef(
+          name = name,
+          isRemote = ref.optBoolean("isRemote"),
+          current = ref.optBoolean("current"),
+          worktreePath = ref.optString("worktreePath"),
+        )
+    }
+    return parsed
+  }
+
+  /**
+   * Moves the checkout to another branch. The host refuses this unless the
+   * session was granted the source control scope.
+   */
+  suspend fun switchRef(cwd: String, refName: String): String {
+    val result =
+      socket.call(
+        PeerProtocol.METHOD_VCS_SWITCH_REF,
+        JSONObject().put("cwd", cwd).put("refName", refName),
+      )
+    return result.optString("refName").ifEmpty { refName }
+  }
+
+  /** Keeps the thread's own branch in step with the checkout it runs in. */
+  suspend fun updateThreadBranch(threadId: String, branch: String, worktreePath: String?) {
+    val command =
+      JSONObject()
+        .put("type", "thread.metadata.update")
+        .put("commandId", UUID.randomUUID().toString())
+        .put("threadId", threadId)
+        .put("branch", branch)
+    if (worktreePath != null) command.put("worktreePath", worktreePath)
+    socket.call(PeerProtocol.METHOD_DISPATCH_COMMAND, command)
+  }
+
   fun close() {
     socket.close()
   }
 
   companion object {
+    /** How many branches the picker asks for at once. */
+    private const val LIST_REFS_LIMIT = 50
+
     /** A socket that stays quiet when idle and notices a dead one. */
     private fun defaultHttpClient(): OkHttpClient =
       OkHttpClient.Builder()

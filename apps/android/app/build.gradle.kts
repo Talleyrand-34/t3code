@@ -60,6 +60,8 @@ dependencies {
   implementation(libs.androidx.security.crypto)
 
   testImplementation(libs.junit)
+  // The Android framework stubs org.json out, so the real one stands in for it.
+  testImplementation(libs.json)
 
   debugImplementation(libs.androidx.compose.ui.tooling)
 }

@@ -14,6 +14,8 @@ object PeerProtocol {
   const val METHOD_SUBSCRIBE_SHELL = "orchestration.subscribeShell"
   const val METHOD_SUBSCRIBE_THREAD = "orchestration.subscribeThread"
   const val METHOD_DISPATCH_COMMAND = "orchestration.dispatchCommand"
+  const val METHOD_VCS_LIST_REFS = "vcs.listRefs"
+  const val METHOD_VCS_SWITCH_REF = "vcs.switchRef"
 
   fun request(id: Int, tag: String, payload: JSONObject): JSONObject =
     JSONObject()

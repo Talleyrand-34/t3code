@@ -7,10 +7,14 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.t3tools.peer.data.PeerStore
+import com.t3tools.peer.model.BranchRef
 import com.t3tools.peer.model.ChatLine
 import com.t3tools.peer.model.ChatRole
 import com.t3tools.peer.model.PeerAppearance
 import com.t3tools.peer.model.PeerParsing
+import com.t3tools.peer.model.PendingMessage
+import com.t3tools.peer.model.QueuedRun
+import com.t3tools.peer.model.SubagentSummary
 import com.t3tools.peer.model.ThreadSummary
 import com.t3tools.peer.net.PeerEndpoint
 import com.t3tools.peer.net.PeerEndpoints
@@ -41,6 +45,14 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     private set
   var lines by mutableStateOf(emptyList<ChatLine>())
     private set
+  /** The other agents working inside the open thread. */
+  var subagents by mutableStateOf(emptyList<SubagentSummary>())
+    private set
+  /** The branch of the open thread, and the branches it can move to. */
+  var branches by mutableStateOf(emptyList<BranchRef>())
+    private set
+  var branchSheetVisible by mutableStateOf(false)
+    private set
   var composer by mutableStateOf("")
   var appearance by mutableStateOf(store.appearance)
   var settingsVisible by mutableStateOf(false)
@@ -52,7 +64,11 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   private var connectionGeneration = 0
   private var appliedLink: String? = null
   private val lineStore = LinkedHashMap<String, ChatLine>()
+  private val runStore = LinkedHashMap<String, QueuedRun>()
+  private val messageStore = LinkedHashMap<String, PendingMessage>()
+  private val subagentStore = LinkedHashMap<String, SubagentSummary>()
   private var projectTitles = emptyMap<String, String>()
+  private var projectRoots = emptyMap<String, String>()
 
   init {
     // A saved session lets the app come back on its own.
@@ -76,6 +92,66 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
 
   fun hideSettings() {
     settingsVisible = false
+  }
+
+  /** Opens the branch picker and asks the host what the project has. */
+  fun showBranches() {
+    branchSheetVisible = true
+    loadBranches()
+  }
+
+  fun hideBranches() {
+    branchSheetVisible = false
+  }
+
+  /** Moves the checkout of the open thread to another branch. */
+  fun switchBranch(ref: BranchRef) {
+    val thread = openThread ?: return
+    val checkout = checkoutOf(thread, ref) ?: return
+    viewModelScope.launch {
+      try {
+        val session = session ?: return@launch
+        val switched = session.switchRef(checkout, ref.name)
+        // The thread follows the checkout it runs in.
+        session.updateThreadBranch(thread.id, switched, worktreeFor(thread, ref))
+        openThread = openThread?.copy(branch = switched)
+        branches = branches.map { it.copy(current = it.name == switched) }
+        branchSheetVisible = false
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not change the branch."
+      }
+    }
+  }
+
+  private fun loadBranches() {
+    val thread = openThread ?: return
+    val checkout = checkoutOf(thread, null) ?: return
+    viewModelScope.launch {
+      try {
+        branches = session?.listRefs(checkout) ?: return@launch
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not read the branches."
+      }
+    }
+  }
+
+  /**
+   * Where the switch happens: a branch that lives in a worktree of its own
+   * is moved there, so the project's checkout is left alone.
+   */
+  private fun checkoutOf(thread: ThreadSummary, ref: BranchRef?): String? {
+    val projectRoot = projectRoots[thread.projectId].orEmpty()
+    val refWorktree = ref?.worktreePath.orEmpty()
+    if (refWorktree.isNotEmpty() && refWorktree != projectRoot) return refWorktree
+    return thread.worktreePath.ifEmpty { projectRoot }.ifEmpty { null }
+  }
+
+  /** The worktree the thread should point at after the switch, if it changes. */
+  private fun worktreeFor(thread: ThreadSummary, ref: BranchRef): String? {
+    val projectRoot = projectRoots[thread.projectId].orEmpty()
+    val refWorktree = ref.worktreePath
+    if (refWorktree.isEmpty() || refWorktree == projectRoot) return null
+    return refWorktree
   }
 
   /**
@@ -145,14 +221,6 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     screen = PeerScreen.THREAD
     closeThreadStream()
     threadStream = session?.subscribeThread(thread.id, ::onThreadItem)
-  }
-
-  fun backToThreads() {
-    openThread = null
-    lineStore.clear()
-    lines = emptyList()
-    screen = PeerScreen.THREADS
-    closeThreadStream()
   }
 
   /** The old thread must stop streaming, or its items land in the new one. */
@@ -246,15 +314,21 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
           return
         }
         projectTitles = titles
+        projectRoots = readProjectRoots(snapshot)
         val collected = mutableListOf<ThreadSummary>()
         readThreads(snapshot.optJSONArray("threads"), collected)
         readThreads(snapshot.optJSONArray("archivedThreads"), collected)
-        threads = collected.sortedByDescending { it.updatedAt }
+        threads = listed(collected).sortedByDescending { it.updatedAt }
       }
 
       "thread.updated" -> {
         val shell = item.optJSONObject("thread") ?: return
         val summary = PeerParsing.thread(shell, projectTitles)
+        if (!summary.isListed) {
+          // A subagent belongs inside its parent, not in the list.
+          threads = threads.filterNot { it.id == summary.id }
+          return
+        }
         threads = (threads.filterNot { it.id == summary.id } + summary)
           .sortedByDescending { it.updatedAt }
       }
@@ -272,7 +346,14 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         val projection = item.optJSONObject("projection") ?: return
         lineStore.clear()
         PeerParsing.lines(projection).forEach { lineStore[it.id] = it }
+        runStore.clear()
+        PeerParsing.runs(projection).forEach { runStore[it.id] = it }
+        messageStore.clear()
+        PeerParsing.messages(projection).forEach { messageStore[it.id] = it }
+        subagentStore.clear()
+        PeerParsing.subagents(projection).forEach { subagentStore[it.id] = it }
         publishLines()
+        publishSubagents()
       }
 
       "event" -> {
@@ -283,6 +364,27 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
             val line = PeerParsing.line(payload) ?: return
             lineStore[line.id] = line
             publishLines()
+          }
+
+          "run.updated" -> {
+            val payload = event.optJSONObject("payload") ?: return
+            val run = PeerParsing.run(payload) ?: return
+            runStore[run.id] = run
+            publishLines()
+          }
+
+          "message.updated" -> {
+            val payload = event.optJSONObject("payload") ?: return
+            val message = PeerParsing.message(payload) ?: return
+            messageStore[message.id] = message
+            publishLines()
+          }
+
+          "subagent.updated" -> {
+            val payload = event.optJSONObject("payload") ?: return
+            val subagent = PeerParsing.subagent(payload) ?: return
+            subagentStore[subagent.id] = subagent
+            publishSubagents()
           }
 
           "thread.updated" -> {
@@ -297,9 +399,25 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
+  /**
+   * The chat, with the messages no run has started yet at the end. They stay
+   * apart from the turn items: a queued message turns into a turn item under
+   * its own id, so keeping them together would show it twice.
+   */
   private fun publishLines() {
-    lines = lineStore.values.toList()
+    lines = lineStore.values.toList() + pendingLines()
   }
+
+  private fun pendingLines(): List<ChatLine> =
+    PeerParsing.pendingLines(runStore.values.toList(), messageStore.values.toList())
+
+  private fun publishSubagents() {
+    subagents = subagentStore.values.sortedBy { it.startedAt }
+  }
+
+  /** Subagents and side chats live inside their parent, never in the list. */
+  private fun listed(threads: List<ThreadSummary>): List<ThreadSummary> =
+    threads.filter { it.isListed }
 
   private fun readProjectTitles(snapshot: JSONObject): Map<String, String> {
     val titles = mutableMapOf<String, String>()
@@ -312,11 +430,31 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     return titles
   }
 
+  /** Where each project lives, so the app can ask the host about its branches. */
+  private fun readProjectRoots(snapshot: JSONObject): Map<String, String> {
+    val roots = mutableMapOf<String, String>()
+    val projects = snapshot.optJSONArray("projects") ?: return roots
+    for (index in 0 until projects.length()) {
+      val project = projects.optJSONObject(index) ?: continue
+      val id = project.optString("id")
+      val root = project.optString("workspaceRoot")
+      if (id.isNotEmpty() && root.isNotEmpty()) roots[id] = root
+    }
+    return roots
+  }
+
   private fun readThreads(array: org.json.JSONArray?, into: MutableList<ThreadSummary>) {
     if (array == null) return
     for (index in 0 until array.length()) {
       val shell = array.optJSONObject(index) ?: continue
       into += PeerParsing.thread(shell, projectTitles)
     }
+  }
+
+  override fun onCleared() {
+    super.onCleared()
+    // The app is gone, so the socket has nothing to talk to.
+    session?.close()
+    session = null
   }
 }
