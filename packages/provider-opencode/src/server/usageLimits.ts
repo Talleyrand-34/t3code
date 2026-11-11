@@ -72,6 +72,7 @@ const MiniMaxQuotaResponse = Schema.Struct({
 });
 
 interface MiniMaxQuotaEntry {
+  readonly model_name?: string;
   readonly current_interval_remaining_percent?: number;
   readonly current_interval_status?: number;
   readonly end_time?: number;
@@ -84,6 +85,7 @@ interface MiniMaxQuotaEntry {
 
 const miniMaxQuotaEntry = Schema.decodeUnknownOption(
   Schema.Struct({
+    model_name: Schema.optionalKey(Schema.String),
     current_interval_remaining_percent: Schema.optionalKey(Schema.Finite),
     current_interval_status: Schema.optionalKey(Schema.Finite),
     end_time: Schema.optionalKey(Schema.Finite),
@@ -94,6 +96,25 @@ const miniMaxQuotaEntry = Schema.decodeUnknownOption(
     current_weekly_status: Schema.optionalKey(Schema.Finite),
   }),
 );
+
+/**
+ * The bucket that meters the plan every chat model draws from. MiniMax reports
+ * one bucket per quota, and the others (a video allowance, for example) meter a
+ * quota no model in T3 Code spends.
+ */
+const MINI_MAX_PLAN_BUCKET = "general";
+
+/**
+ * The plan's own bucket. Reporting a second bucket under the same window ids
+ * would pool two different quotas into one percentage, so only the bucket that
+ * meters the plan is reported.
+ */
+function miniMaxPlanBucket(entries: readonly MiniMaxQuotaEntry[]): MiniMaxQuotaEntry | undefined {
+  const plan = entries.find((entry) => entry.model_name === MINI_MAX_PLAN_BUCKET);
+  if (plan) return plan;
+  // A payload with a single bucket leaves no room for ambiguity.
+  return entries.length === 1 ? entries[0] : undefined;
+}
 
 // Select before decoding so an OAuth or self-hosted connection cannot fall
 // through to another stored account. NULL-active rows predate the selection flag.
@@ -262,34 +283,34 @@ export const readOpenCodeIntegrationUsageLimits = Effect.fn("readOpenCodeIntegra
         if (Option.isNone(body)) continue;
         const payload = body.value;
         if ((payload.base_resp?.status_code ?? 0) !== 0) continue;
-        for (const raw of payload.model_remains ?? []) {
-          const entry: MiniMaxQuotaEntry | undefined = Option.getOrUndefined(
-            miniMaxQuotaEntry(raw),
-          );
-          if (entry === undefined) continue;
-          const interval = miniMaxWindow(
-            integrationId,
-            quota.label,
-            "interval",
-            "session",
-            entry.current_interval_remaining_percent,
-            entry.current_interval_status,
-            entry.end_time,
-            entry.start_time,
-          );
-          const weekly = miniMaxWindow(
-            integrationId,
-            quota.label,
-            "weekly",
-            "weekly",
-            entry.current_weekly_remaining_percent,
-            entry.current_weekly_status,
-            entry.weekly_end_time,
-            entry.weekly_start_time,
-          );
-          if (interval !== null) windows.push(interval);
-          if (weekly !== null) windows.push(weekly);
-        }
+        const entries = (payload.model_remains ?? []).flatMap((raw) => {
+          const entry = Option.getOrUndefined(miniMaxQuotaEntry(raw));
+          return entry ? [entry] : [];
+        });
+        const plan = miniMaxPlanBucket(entries);
+        if (plan === undefined) continue;
+        const interval = miniMaxWindow(
+          integrationId,
+          quota.label,
+          "interval",
+          "session",
+          plan.current_interval_remaining_percent,
+          plan.current_interval_status,
+          plan.end_time,
+          plan.start_time,
+        );
+        const weekly = miniMaxWindow(
+          integrationId,
+          quota.label,
+          "weekly",
+          "weekly",
+          plan.current_weekly_remaining_percent,
+          plan.current_weekly_status,
+          plan.weekly_end_time,
+          plan.weekly_start_time,
+        );
+        if (interval !== null) windows.push(interval);
+        if (weekly !== null) windows.push(weekly);
       }
       return { checkedAt, windows };
     }).pipe(
@@ -313,7 +334,12 @@ export function mergeUsageLimits(
   integrationWindows: readonly ServerProviderUsageWindow[],
 ): ServerProviderUsageLimits {
   if (integrationWindows.length === 0) return console;
+  // The integration's quota replaces the unavailable marker, but the Console
+  // metadata stays: its fingerprint is what tells one account apart from
+  // another when several environments report the same one.
+  const { unavailable: _unavailable, ...consoleMetadata } = console;
   return {
+    ...consoleMetadata,
     checkedAt: console.checkedAt,
     windows: [...console.windows, ...integrationWindows],
   };

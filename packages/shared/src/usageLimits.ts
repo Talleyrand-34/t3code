@@ -58,12 +58,10 @@ export function exhaustedUsageWindow(
       // come from its own provider instead of whichever plan happens to be
       // exhausted. The Console budget is metered as "go".
       const integration = model.split("/")[0] ?? "";
-      const family = (value: string) => value.split("-")[0]!.split("_")[0]!;
-      const target = family(integration);
       return exhausted.find((window) => {
         const owner = window.id.split("_")[0]!;
         if (owner === "go") return integration === "opencode-go";
-        return family(owner) === target;
+        return owner === integration;
       });
     }
     default:
