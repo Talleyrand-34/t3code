@@ -8,6 +8,7 @@ import { AsyncResult } from "effect/reactivity";
 import {
   shouldCreateNewThreadInCurrentProject,
   deleteSelectedThreadEntries,
+  filterSidebarAgentThreads,
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
@@ -132,6 +133,96 @@ describe("deleteSelectedThreadEntries", () => {
       deletedThreadKeys: testCase.deletedThreadKeys,
       firstFailure: testCase.firstFailure,
     });
+  });
+});
+
+describe("the Agents shelf", () => {
+  it("lists the subagent threads whose parent is still around", () => {
+    const environmentId = EnvironmentId.make("environment-agents");
+    const otherEnvironmentId = EnvironmentId.make("environment-agents-other");
+    const parent = makeThreadFixture({ id: ThreadId.make("thread-parent"), environmentId });
+    const subagent = makeThreadFixture({
+      id: ThreadId.make("thread-subagent"),
+      environmentId,
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: "subagent",
+      },
+    });
+    const grandchild = makeThreadFixture({
+      id: ThreadId.make("thread-grandchild"),
+      environmentId,
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: subagent.id,
+        relationshipToParent: "subagent",
+      },
+    });
+    const orphan = makeThreadFixture({
+      id: ThreadId.make("thread-orphan"),
+      environmentId,
+      lineage: {
+        rootThreadId: ThreadId.make("thread-missing"),
+        parentThreadId: ThreadId.make("thread-missing"),
+        relationshipToParent: "subagent",
+      },
+    });
+    const sideChat = makeThreadFixture({
+      id: ThreadId.make("thread-side-chat"),
+      environmentId,
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: null,
+        sideChat: true,
+      },
+    });
+    const elsewhere = makeThreadFixture({
+      id: ThreadId.make("thread-elsewhere"),
+      environmentId: otherEnvironmentId,
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: "subagent",
+      },
+    });
+    const threads = [parent, subagent, grandchild, orphan, sideChat, elsewhere];
+
+    expect(filterSidebarAgentThreads(threads, null).map((thread) => thread.id)).toEqual([
+      subagent.id,
+      grandchild.id,
+    ]);
+  });
+
+  it("keeps an agent out of a scope that hides its project", () => {
+    const environmentId = EnvironmentId.make("environment-agents-scope");
+    const parent = makeThreadFixture({
+      id: ThreadId.make("thread-scope-parent"),
+      environmentId,
+      projectId: ProjectId.make("project-one"),
+    });
+    const subagent = makeThreadFixture({
+      id: ThreadId.make("thread-scope-subagent"),
+      environmentId,
+      projectId: ProjectId.make("project-two"),
+      lineage: {
+        rootThreadId: parent.id,
+        parentThreadId: parent.id,
+        relationshipToParent: "subagent",
+      },
+    });
+
+    expect(
+      filterSidebarAgentThreads([parent, subagent], new Set([`${environmentId}:project-one`])).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual([]);
+    expect(
+      filterSidebarAgentThreads([parent, subagent], new Set([`${environmentId}:project-two`])).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual([subagent.id]);
   });
 });
 

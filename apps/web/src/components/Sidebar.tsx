@@ -34,7 +34,7 @@ import {
   createInboxReturnTracker,
   isThreadWorking,
 } from "@t3tools/client-runtime/state/thread-inbox";
-import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
+import { sortSettledThreads, sortThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
   nextShownOrder,
   threadSearchMatchKey,
@@ -179,6 +179,7 @@ import {
 } from "./threadActionMenu.logic";
 import {
   applySidebarThreadDrop,
+  filterSidebarAgentThreads,
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   sidebarFolderExpansionKeys,
@@ -329,6 +330,7 @@ const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+const AGENTS_SHELF_EXPANDED_KEY = "t3code:sidebar:agents-expanded";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -461,6 +463,11 @@ function useSidebarThreads(input: {
     false,
     Schema.Boolean,
   );
+  const [agentsShelfExpanded, setAgentsShelfExpanded] = useLocalStorage(
+    AGENTS_SHELF_EXPANDED_KEY,
+    false,
+    Schema.Boolean,
+  );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
@@ -488,6 +495,7 @@ function useSidebarThreads(input: {
 
   const { pinnedThreads, activeThreads, workingThreads, snoozedThreads, settledThreads } =
     partition;
+  const agentThreads = partition.agentThreads;
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const olderSettledShelf = useOlderSettledShelf({
     scopes: olderSettledScopes([...serverConfigs.keys()], scopedProjectKeys),
@@ -520,6 +528,9 @@ function useSidebarThreads(input: {
   const visibleWorkingThreads = workingShelfExpanded
     ? workingThreads
     : routeThreadOnly(workingThreads, routeRowThreadKey);
+  const visibleAgentThreads = agentsShelfExpanded
+    ? agentThreads
+    : routeThreadOnly(agentThreads, routeRowThreadKey);
   const projectFolders =
     folderGroups === null
       ? null
@@ -546,6 +557,7 @@ function useSidebarThreads(input: {
       ? activeThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...visibleWorkingThreads,
+    ...visibleAgentThreads,
     ...visibleSnoozedThreads,
     ...renderedSettledThreads,
   ];
@@ -554,6 +566,7 @@ function useSidebarThreads(input: {
     [pinnedThreads, "pinned"],
     [activeThreads, "active"],
     [workingThreads, "working"],
+    [agentThreads, "agents"],
     [snoozedThreads, "snoozed"],
     [settledThreads, "settled"],
   ] as const) {
@@ -567,6 +580,7 @@ function useSidebarThreads(input: {
       ...pinnedThreads,
       ...activeThreads,
       ...workingThreads,
+      ...agentThreads,
       ...snoozedThreads,
       ...settledThreads,
     ],
@@ -585,6 +599,10 @@ function useSidebarThreads(input: {
     toggleSnoozedShelf: () => setSnoozedShelfExpanded((value) => !value),
     workingShelfExpanded,
     toggleWorkingShelf: () => setWorkingShelfExpanded((value) => !value),
+    agentsShelfExpanded,
+    toggleAgentsShelf: () => setAgentsShelfExpanded((value) => !value),
+    visibleAgentThreads,
+    agentThreadKeys: new Set(agentThreads.map(threadShellKey)),
     projectFolders,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
@@ -621,6 +639,11 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
   } = input;
   const preciseNow = new Date().toISOString();
   const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, delegatedUnderParent);
+  // A subagent thread has no row of its own; the Agents shelf lists it.
+  const agentThreads = sortThreads(
+    filterSidebarAgentThreads(threads, scopedProjectKeys),
+    "updated_at",
+  );
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -706,6 +729,7 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
         firstValidTimestampMs(right.snoozedUntil ?? null),
     ),
     settledThreads: sortSettledThreads(settled),
+    agentThreads,
     visibleThreads: visible,
     snoozeNow: preciseNow,
   };
@@ -1313,6 +1337,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleSnoozedShelf,
     workingShelfExpanded,
     toggleWorkingShelf,
+    agentsShelfExpanded,
+    toggleAgentsShelf,
+    agentThreads,
+    visibleAgentThreads,
     projectFolders,
     toggleProjectFolder,
     renderedSettledThreads,
@@ -1935,6 +1963,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       pinnedThreads.length +
         activeThreads.length +
         workingThreads.length +
+        agentThreads.length +
         snoozedThreads.length +
         settledCount ===
         0
@@ -1951,6 +1980,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (workingThreads.length > 0) {
       items.push({ kind: "marker", marker: "working-header" });
       items.push(...rowsOf(visibleWorkingThreads, "working"));
+    }
+    if (agentThreads.length > 0) {
+      items.push({ kind: "marker", marker: "agents-header" });
+      items.push(...rowsOf(visibleAgentThreads, "agents"));
     }
     if (snoozedThreads.length > 0) {
       items.push({ kind: "marker", marker: "snoozed-header" });
@@ -3365,6 +3398,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
+                              section === "agents" ||
                               section === "snoozed" ||
                               section === "settled"
                                 ? `shelf:${section}`
@@ -3547,6 +3581,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 toggle={{
                                   expanded: workingShelfExpanded,
                                   onToggle: toggleWorkingShelf,
+                                }}
+                              />,
+                            );
+                            break;
+                          case "agents-header":
+                            items.push(
+                              <SidebarSectionHeader
+                                key="agents-shelf-header"
+                                marker="agents-header"
+                                label="Agents"
+                                count={agentThreads.length}
+                                toggle={{
+                                  expanded: agentsShelfExpanded,
+                                  onToggle: toggleAgentsShelf,
                                 }}
                               />,
                             );

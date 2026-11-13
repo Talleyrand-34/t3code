@@ -171,7 +171,7 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 
 // Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
 
-export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
+export type SidebarSection = "pinned" | "active" | "working" | "agents" | "snoozed" | "settled";
 
 export function resolveSidebarThreadSection(input: {
   readonly snoozed: boolean;
@@ -192,6 +192,7 @@ export type SidebarListMarker =
   | "settled-placeholder"
   | "pinned-divider"
   | "working-header"
+  | "agents-header"
   | "snoozed-header"
   | "settled-header";
 
@@ -214,6 +215,7 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     if (item.kind !== "marker") continue;
     if (item.marker === "pinned-divider") section = "active";
     else if (item.marker === "working-header") section = "working";
+    else if (item.marker === "agents-header") section = "agents";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
   }
@@ -237,7 +239,7 @@ export function resolveSidebarDropTarget(
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
-  if (section === "working" || section === "snoozed") return null;
+  if (section === "working" || section === "agents" || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
@@ -246,6 +248,7 @@ export function resolveSidebarDropTarget(
       if (item.marker === "pinned-divider") currentSection = "active";
       else if (
         item.marker === "working-header" ||
+        item.marker === "agents-header" ||
         item.marker === "snoozed-header" ||
         item.marker === "settled-header"
       )
@@ -607,6 +610,34 @@ export function filterSidebarV2VisibleThreads<
         { environmentId: thread.environmentId, threadId: thread.id },
         thread.lineage,
         delegatedUnderParent,
+      ) &&
+      (scopedProjectKeys === null ||
+        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+  );
+}
+
+/**
+ * The agents the sidebar can list. A subagent thread has no row of its own, so
+ * the Agents shelf is where one shows; an agent whose parent is gone has
+ * nowhere to go back to and stays out of the list.
+ */
+export function filterSidebarAgentThreads<
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "environmentId" | "id" | "lineage"> & {
+    projectId: string;
+  },
+>(threads: readonly T[], scopedProjectKeys: ReadonlySet<string> | null): T[] {
+  // An agent of an agent hangs under the thread that has the sidebar row.
+  const roots = new Set<string>();
+  for (const thread of threads) {
+    if (thread.lineage.relationshipToParent === "subagent") continue;
+    roots.add(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)));
+  }
+  return threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      thread.lineage.relationshipToParent === "subagent" &&
+      roots.has(
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.lineage.rootThreadId)),
       ) &&
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),

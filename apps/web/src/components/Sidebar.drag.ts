@@ -16,6 +16,7 @@ type Layout = Parameters<SortingStrategy>[0];
 const isShelfHeader = (item: SidebarListItem | undefined) =>
   item?.kind === "marker" &&
   (item.marker === "working-header" ||
+    item.marker === "agents-header" ||
     item.marker === "snoozed-header" ||
     item.marker === "settled-header");
 
@@ -118,6 +119,7 @@ export function createSidebarSortingStrategy(input: {
       pinned: [],
       active: [],
       working: [],
+      agents: [],
       snoozed: [],
       settled: [],
     };

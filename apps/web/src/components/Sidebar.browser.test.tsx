@@ -1,4 +1,4 @@
-import { DEFAULT_CLIENT_SETTINGS, EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -6,7 +6,8 @@ import { render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { __setClientSettingsForTests, getClientSettings } from "../hooks/useSettings";
-import { useProjects } from "../state/entities";
+import { useProjects, useQuietThreadShells } from "../state/entities";
+import { makeThreadFixture } from "../test-fixtures";
 import type { Project } from "../types";
 import Sidebar from "./Sidebar";
 import { SidebarProvider } from "./ui/sidebar";
@@ -83,5 +84,58 @@ describe("sidebar header new thread", () => {
       expect(openCommandPalette).not.toHaveBeenCalled();
       expect(startThread).toHaveBeenCalledExactlyOnceWith(currentProjectRef);
     }
+  });
+});
+
+describe("the Agents shelf", () => {
+  it("lists an agent thread under its own header and folds it away", async () => {
+    using stack = new DisposableStack();
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS });
+    window.localStorage.removeItem("t3code:sidebar:agents-expanded");
+    vi.mocked(useProjects).mockReturnValue([project("active")]);
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: null,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: null,
+    });
+    const parentId = ThreadId.make("thread-parent");
+    const parent = makeThreadFixture({
+      id: parentId,
+      environmentId: EnvironmentId.make("local"),
+      projectId: ProjectId.make("active"),
+      title: "Parent",
+    });
+    const agent = makeThreadFixture({
+      id: ThreadId.make("thread-agent"),
+      environmentId: EnvironmentId.make("local"),
+      projectId: ProjectId.make("active"),
+      title: "Agent",
+      lineage: {
+        rootThreadId: parentId,
+        parentThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+    });
+    vi.mocked(useQuietThreadShells).mockReturnValue([parent, agent]);
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    const toggle = screen.getByTestId("sidebar-agents-shelf-toggle");
+    const row = screen.getByTestId("sidebar-row-slim");
+    await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(row.query()).toBeNull();
+
+    await userEvent.click(toggle);
+    await expect.element(toggle).toHaveAttribute("aria-expanded", "true");
+    await vi.waitFor(() => expect(row.element().textContent).toContain("Agent"));
   });
 });
