@@ -184,6 +184,8 @@ export default function FileBrowserPanel({
       }
       const relativePath = item.path.replace(/\/$/, "");
       const mention = serializeComposerFileLink(panelPath(relativePath));
+      // The path on the machine that holds the file, not the path inside the project.
+      const fullPath = joinHostPath(cwd, relativePath);
       const pointer = contextMenuPointerRef.current;
       const pointerIsFresh = pointer !== null && performance.now() - pointer.at < 1000;
       const anchorRect = context.anchorElement.getBoundingClientRect();
@@ -199,6 +201,7 @@ export default function FileBrowserPanel({
           [
             ...fileMenuItems,
             { id: "copy-mention", label: "Copy mention" },
+            { id: "copy-full-path", label: "Copy full path" },
             { id: "add-to-chat", label: "Add to chat" },
           ],
           position,
@@ -223,6 +226,23 @@ export default function FileBrowserPanel({
             toastManager.add({
               type: "error",
               title: "Failed to copy mention",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            });
+          }
+          return;
+        }
+        if (clicked === "copy-full-path") {
+          try {
+            await writeTextToClipboard(fullPath);
+            toastManager.add({
+              type: "success",
+              title: "Path copied",
+              description: fullPath,
+            });
+          } catch (error) {
+            toastManager.add({
+              type: "error",
+              title: "Failed to copy path",
               description: error instanceof Error ? error.message : "An error occurred.",
             });
           }

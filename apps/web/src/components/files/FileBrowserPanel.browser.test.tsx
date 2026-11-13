@@ -82,6 +82,35 @@ describe("FileBrowserPanel", () => {
     await vi.waitFor(() => expect((row.getRootNode() as ShadowRoot).activeElement).toBe(row));
   });
 
+  it("copies the path of a file on the machine that holds it", async () => {
+    await using _screen = await render(
+      <FileBrowserPanel
+        environmentId={EnvironmentId.make("env-files")}
+        cwd="/repo"
+        projectName="repo"
+        selectedPath={null}
+        selectedPathRevealId={0}
+        onOpenFile={() => {}}
+        workspaceMutationId={null}
+      />,
+    );
+    using _menu = { [Symbol.dispose]: () => dismissContextMenu() };
+    using clipboard = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    await vi.waitFor(() => expect(findTreeRow("README.md")).not.toBeNull());
+    findTreeRow("README.md")!.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        button: 2,
+      }),
+    );
+    const action = page.getByRole("menuitem", { name: "Copy full path", exact: true });
+    await expect.element(action).toBeVisible();
+    await userEvent.click(action);
+    await vi.waitFor(() => expect(clipboard).toHaveBeenCalledWith("/repo/README.md"));
+  });
+
   it("dragging a file row carries a composer mention without opening it, and dragend releases it", async () => {
     const onOpenFile = vi.fn();
     await using _screen = await render(
