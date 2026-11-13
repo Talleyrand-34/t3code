@@ -139,3 +139,53 @@ describe("the Agents shelf", () => {
     await vi.waitFor(() => expect(row.element().textContent).toContain("Agent"));
   });
 });
+
+describe("the project folder button", () => {
+  it("folds and unfolds every project folder", async () => {
+    using stack = new DisposableStack();
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, boringSidebarEnabled: true });
+    vi.mocked(useProjects).mockReturnValue([project("active"), project("idle")]);
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: null,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: null,
+    });
+    vi.mocked(useQuietThreadShells).mockReturnValue([
+      makeThreadFixture({
+        id: ThreadId.make("thread-active"),
+        environmentId: EnvironmentId.make("local"),
+        projectId: ProjectId.make("active"),
+        title: "Active thread",
+      }),
+      makeThreadFixture({
+        id: ThreadId.make("thread-idle"),
+        environmentId: EnvironmentId.make("local"),
+        projectId: ProjectId.make("idle"),
+        title: "Idle thread",
+      }),
+    ]);
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    const folders = () => screen.getByTestId("sidebar-project-folder").elements();
+    const expanded = () =>
+      folders().map((folder) => folder.querySelector("button")?.getAttribute("aria-expanded"));
+    await vi.waitFor(() => expect(folders().length).toBe(2));
+    expect(expanded()).toEqual(["true", "true"]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Collapse all projects" }));
+    await vi.waitFor(() => expect(expanded()).toEqual(["false", "false"]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Expand all projects" }));
+    await vi.waitFor(() => expect(expanded()).toEqual(["true", "true"]));
+  });
+});

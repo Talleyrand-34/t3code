@@ -64,6 +64,8 @@ import type { OlderSettledScope } from "@t3tools/client-runtime/state/threads";
 import {
   CheckIcon,
   ChevronDownIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
   FolderIcon,
   ListFilterIcon,
   PlusIcon,
@@ -607,6 +609,15 @@ function useSidebarThreads(input: {
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
       setProjectExpanded(keys, !resolveProjectExpanded(projectExpandedById, keys));
+    },
+    allProjectFoldersExpanded:
+      projectFolders === null || projectFolders.every((folder) => !folder.collapsed),
+    toggleAllProjectFolders: () => {
+      const keys =
+        projectFolders?.flatMap((folder) => sidebarFolderExpansionKeys(folder.group)) ?? [];
+      if (keys.length === 0) return;
+      const expanded = !(projectFolders?.every((folder) => !folder.collapsed) ?? true);
+      setProjectExpanded(keys, expanded);
     },
     renderedSettledThreads,
     visibleSnoozedThreads,
@@ -1343,6 +1354,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     visibleAgentThreads,
     projectFolders,
     toggleProjectFolder,
+    allProjectFoldersExpanded,
+    toggleAllProjectFolders,
     renderedSettledThreads,
     visibleSnoozedThreads,
     visibleWorkingThreads,
@@ -3025,6 +3038,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
+              projectFoldersToggle={
+                projectFolders === null || projectFolders.length === 0 ? null : (
+                  <SidebarHeaderIconButton
+                    label={
+                      allProjectFoldersExpanded ? "Collapse all projects" : "Expand all projects"
+                    }
+                    onClick={toggleAllProjectFolders}
+                  >
+                    {allProjectFoldersExpanded ? <ChevronsDownUpIcon /> : <ChevronsUpDownIcon />}
+                  </SidebarHeaderIconButton>
+                )
+              }
               projectScope={
                 <Combobox
                   items={projectScopeItems}
