@@ -102,7 +102,7 @@ const readLimits = (
   dataHome: string,
   dir: string,
   client: HttpClient.HttpClient,
-  endpoints: ReadonlyMap<string, string>,
+  endpoint: string | undefined,
 ) =>
   readOpenCodeIntegrationUsageLimits({
     enabled: true,
@@ -111,7 +111,7 @@ const readLimits = (
       HOME: dir,
       XDG_DATA_HOME: dataHome,
     },
-    endpoints,
+    resolveEndpoint: () => Effect.succeed(endpoint),
   }).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
 describe("readOpenCodeIntegrationUsageLimits", () => {
@@ -122,12 +122,7 @@ describe("readOpenCodeIntegrationUsageLimits", () => {
       const client = HttpClient.make((request) =>
         Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(MINIMAX_RESPONSE))),
       );
-      const result = yield* readLimits(
-        dataHome,
-        dir,
-        client,
-        new Map([["minimax-coding-plan", MINIMAX_ENDPOINT]]),
-      );
+      const result = yield* readLimits(dataHome, dir, client, MINIMAX_ENDPOINT);
 
       assert.strictEqual(result.windows.length, 2);
       const [interval, weekly] = result.windows;
@@ -148,12 +143,7 @@ describe("readOpenCodeIntegrationUsageLimits", () => {
       const client = HttpClient.make((request) =>
         Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(MINIMAX_RESPONSE))),
       );
-      const result = yield* readLimits(
-        dataHome,
-        dir,
-        client,
-        new Map([["minimax-coding-plan", MINIMAX_ENDPOINT]]),
-      );
+      const result = yield* readLimits(dataHome, dir, client, MINIMAX_ENDPOINT);
 
       // The video bucket is exhausted; reporting it would exhaust the plan too.
       assert.isTrue(result.windows.every((window) => window.usedPercent < 100));
@@ -169,12 +159,7 @@ describe("readOpenCodeIntegrationUsageLimits", () => {
           HttpClientResponse.fromWeb(request, Response.json(MINIMAX_PLAN_AND_VIDEO_RESPONSE)),
         ),
       );
-      const result = yield* readLimits(
-        dataHome,
-        dir,
-        client,
-        new Map([["minimax-coding-plan", MINIMAX_ENDPOINT]]),
-      );
+      const result = yield* readLimits(dataHome, dir, client, MINIMAX_ENDPOINT);
 
       assert.strictEqual(result.windows.length, 2);
       const [interval, weekly] = result.windows;
@@ -192,12 +177,7 @@ describe("readOpenCodeIntegrationUsageLimits", () => {
       const client = HttpClient.make((request) =>
         Effect.die(`The key left the machine: ${request.url}`),
       );
-      const result = yield* readLimits(
-        dataHome,
-        dir,
-        client,
-        new Map([["minimax-coding-plan", MINIMAX_ENDPOINT]]),
-      );
+      const result = yield* readLimits(dataHome, dir, client, MINIMAX_ENDPOINT);
 
       assert.deepStrictEqual(result.windows, []);
       assert.isUndefined(result.credentialFingerprint);
@@ -211,12 +191,7 @@ describe("readOpenCodeIntegrationUsageLimits", () => {
       const client = HttpClient.make((request) =>
         Effect.die(`The key left the machine: ${request.url}`),
       );
-      const result = yield* readLimits(
-        dataHome,
-        dir,
-        client,
-        new Map([["minimax-coding-plan", "https://gateway.example/v1"]]),
-      );
+      const result = yield* readLimits(dataHome, dir, client, "https://gateway.example/v1");
 
       assert.deepStrictEqual(result.windows, []);
       assert.isUndefined(result.credentialFingerprint);
@@ -230,7 +205,7 @@ describe("readOpenCodeIntegrationUsageLimits", () => {
       const client = HttpClient.make((request) =>
         Effect.die(`The key left the machine: ${request.url}`),
       );
-      const result = yield* readLimits(dataHome, dir, client, new Map());
+      const result = yield* readLimits(dataHome, dir, client, undefined);
 
       assert.deepStrictEqual(result.windows, []);
       assert.isUndefined(result.credentialFingerprint);
@@ -250,12 +225,7 @@ describe("readOpenCodeIntegrationUsageLimits", () => {
       const client = HttpClient.make((request) =>
         Effect.die(`The key left the machine: ${request.url}`),
       );
-      const result = yield* readLimits(
-        dataHome,
-        dir,
-        client,
-        new Map([["minimax-coding-plan", MINIMAX_ENDPOINT]]),
-      );
+      const result = yield* readLimits(dataHome, dir, client, MINIMAX_ENDPOINT);
 
       assert.deepStrictEqual(result.windows, []);
       assert.isUndefined(result.credentialFingerprint);

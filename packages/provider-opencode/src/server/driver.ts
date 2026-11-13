@@ -369,36 +369,35 @@ export const OpenCodeDriver: ProviderDriver<
       Effect.provideService(Digest.Digest, digest),
     );
     // A custom provider meters its own plan, so its quota has to be read from
-    // that provider rather than from the OpenCode Console budget.
-    const noEndpoints = new Map<string, string>();
-    // The endpoint OpenCode resolves for a provider says whose key a credential
-    // is, so the quota probe only sends a key to the provider that owns it.
-    const checkProviderEndpoints = Effect.gen(function* () {
-      if (!effectiveConfig.enabled) return noEndpoints;
-      const runtime = yield* runtimeProbe.get.pipe(Effect.option);
-      if (runtime._tag === "None" || runtime.value.generation === "v1") return noEndpoints;
-      return yield* openCode2Server
-        .withConnection((connection) => readProviderEndpoints(connection, host.paths.cwd))
-        .pipe(Effect.orElseSucceed(() => noEndpoints));
-    });
+    // that provider rather than from the OpenCode Console budget. The endpoint
+    // OpenCode resolves for a provider says whose key a credential is, so it
+    // is read only for a provider that has a credential to check.
+    const checkIntegrationUsageLimits = readOpenCodeIntegrationUsageLimits({
+      enabled: effectiveConfig.enabled,
+      serverUrl: effectiveConfig.serverUrl,
+      environment: processEnv,
+      resolveEndpoint: (integrationId) =>
+        openCode2Server
+          .withConnection((connection) =>
+            readProviderEndpoints(connection, host.paths.cwd).pipe(
+              Effect.map((endpoints) => endpoints.get(integrationId)),
+            ),
+          )
+          .pipe(Effect.catchCause(() => Effect.undefined)),
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, pathService),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(Digest.Digest, digest),
+    );
     // One probe for the provider's limits, so the recovery that retries a
     // failed read retries the Console budget and the integration quotas alike.
-    const checkUsageLimits = Effect.gen(function* () {
-      const endpoints = yield* checkProviderEndpoints;
-      const integration = yield* readOpenCodeIntegrationUsageLimits({
-        enabled: effectiveConfig.enabled,
-        serverUrl: effectiveConfig.serverUrl,
-        environment: processEnv,
-        endpoints,
-      }).pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, pathService),
-        Effect.provideService(HttpClient.HttpClient, httpClient),
-        Effect.provideService(Digest.Digest, digest),
-      );
-      const limits = yield* checkConsoleUsageLimits;
-      return mergeUsageLimits(limits, integration);
-    });
+    const checkUsageLimits = Effect.zipWith(
+      checkConsoleUsageLimits,
+      checkIntegrationUsageLimits,
+      (usageLimits, integration) => mergeUsageLimits(usageLimits, integration),
+      { concurrent: true },
+    );
     const checkProvider = Effect.all(
       {
         provider: checkOpenCodeProviderStatus(
