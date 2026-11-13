@@ -463,6 +463,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
         instanceId: ProviderInstanceId.make("opencode-usage-recovery"),
         displayName: undefined,
         environment: [
+          ...(yield* sandboxStore),
           {
             name: "OPENCODE_AUTH_CONTENT",
             sensitive: true,
