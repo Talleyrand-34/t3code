@@ -50,6 +50,7 @@ import {
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
 import * as OpenCode2Client from "./v2/OpenCode2Client.ts";
 import * as OpenCode2Server from "./v2/OpenCode2Server.ts";
+import { readProviderEndpoints } from "./v2/providerEndpoints.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -369,24 +370,35 @@ export const OpenCodeDriver: ProviderDriver<
     );
     // A custom provider meters its own plan, so its quota has to be read from
     // that provider rather than from the OpenCode Console budget.
-    const checkIntegrationUsageLimits = readOpenCodeIntegrationUsageLimits({
-      enabled: effectiveConfig.enabled,
-      serverUrl: effectiveConfig.serverUrl,
-      environment: processEnv,
-    }).pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, pathService),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-      Effect.provideService(Digest.Digest, digest),
-    );
+    const noEndpoints = new Map<string, string>();
+    // The endpoint OpenCode resolves for a provider says whose key a credential
+    // is, so the quota probe only sends a key to the provider that owns it.
+    const checkProviderEndpoints = Effect.gen(function* () {
+      if (!effectiveConfig.enabled) return noEndpoints;
+      const runtime = yield* runtimeProbe.get.pipe(Effect.option);
+      if (runtime._tag === "None" || runtime.value.generation === "v1") return noEndpoints;
+      return yield* openCode2Server
+        .withConnection((connection) => readProviderEndpoints(connection, host.paths.cwd))
+        .pipe(Effect.orElseSucceed(() => noEndpoints));
+    });
     // One probe for the provider's limits, so the recovery that retries a
     // failed read retries the Console budget and the integration quotas alike.
-    const checkUsageLimits = Effect.zipWith(
-      checkConsoleUsageLimits,
-      checkIntegrationUsageLimits,
-      (usageLimits, integration) => mergeUsageLimits(usageLimits, integration),
-      { concurrent: true },
-    );
+    const checkUsageLimits = Effect.gen(function* () {
+      const endpoints = yield* checkProviderEndpoints;
+      const integration = yield* readOpenCodeIntegrationUsageLimits({
+        enabled: effectiveConfig.enabled,
+        serverUrl: effectiveConfig.serverUrl,
+        environment: processEnv,
+        endpoints,
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, pathService),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.provideService(Digest.Digest, digest),
+      );
+      const limits = yield* checkConsoleUsageLimits;
+      return mergeUsageLimits(limits, integration);
+    });
     const checkProvider = Effect.all(
       {
         provider: checkOpenCodeProviderStatus(
