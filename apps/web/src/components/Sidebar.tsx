@@ -333,6 +333,7 @@ const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 const AGENTS_SHELF_EXPANDED_KEY = "t3code:sidebar:agents-expanded";
+const IDLE_SHELF_EXPANDED_KEY = "t3code:sidebar:idle-expanded";
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -470,6 +471,12 @@ function useSidebarThreads(input: {
     false,
     Schema.Boolean,
   );
+  // Idle threads are the ones no agent is working on; the shelf folds them away.
+  const [idleShelfExpanded, setIdleShelfExpanded] = useLocalStorage(
+    IDLE_SHELF_EXPANDED_KEY,
+    true,
+    Schema.Boolean,
+  );
   // Shared with the old per-project sidebar, so folders keep their open state.
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const setProjectExpanded = useUiStateStore((store) => store.setProjectExpanded);
@@ -533,6 +540,13 @@ function useSidebarThreads(input: {
   const visibleAgentThreads = agentsShelfExpanded
     ? agentThreads
     : routeThreadOnly(agentThreads, routeRowThreadKey);
+  // Folders list the idle threads inside each project, so they need no shelf.
+  const idleShelfEnabled = folderGroups === null;
+  const visibleActiveThreads = idleShelfEnabled
+    ? idleShelfExpanded
+      ? activeThreads
+      : routeThreadOnly(activeThreads, routeRowThreadKey)
+    : activeThreads;
   const projectFolders =
     folderGroups === null
       ? null
@@ -556,7 +570,7 @@ function useSidebarThreads(input: {
   const orderedThreads = [
     ...pinnedThreads,
     ...(projectFolders === null
-      ? activeThreads
+      ? visibleActiveThreads
       : projectFolders.flatMap((folder) => folder.threads)),
     ...visibleWorkingThreads,
     ...visibleAgentThreads,
@@ -605,6 +619,10 @@ function useSidebarThreads(input: {
     toggleAgentsShelf: () => setAgentsShelfExpanded((value) => !value),
     visibleAgentThreads,
     agentThreadKeys: new Set(agentThreads.map(threadShellKey)),
+    idleShelfEnabled,
+    idleShelfExpanded,
+    toggleIdleShelf: () => setIdleShelfExpanded((value) => !value),
+    visibleActiveThreads,
     projectFolders,
     toggleProjectFolder: (group: SidebarProjectSnapshot) => {
       const keys = sidebarFolderExpansionKeys(group);
@@ -1352,6 +1370,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     toggleAgentsShelf,
     agentThreads,
     visibleAgentThreads,
+    idleShelfEnabled,
+    idleShelfExpanded,
+    toggleIdleShelf,
+    visibleActiveThreads,
     projectFolders,
     toggleProjectFolder,
     allProjectFoldersExpanded,
@@ -1987,7 +2009,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
+    const activeRows = rowsOf(visibleActiveThreads, "active");
+    if (idleShelfEnabled && activeThreads.length > 0) {
+      items.push({ kind: "marker", marker: "idle-header" });
+    }
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
     if (workingThreads.length > 0) {
@@ -3571,7 +3596,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarDragBoundary
                                 key="pinned-divider"
                                 marker="pinned-divider"
-                                label="Active"
+                                label="Idle"
                                 visible={from !== null}
                                 isDropTarget={dragTargetSection === "active"}
                               />,
@@ -3582,7 +3607,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               <SidebarSectionPlaceholder
                                 key="active-placeholder"
                                 marker="active-placeholder"
-                                label="Active"
+                                label="Idle"
                                 showHint={
                                   from !== null &&
                                   (activeThreads.length === 0 ||
@@ -3592,6 +3617,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                       dragTargetSection !== "active"))
                                 }
                                 isDropTarget={dragTargetSection === "active"}
+                              />,
+                            );
+                            break;
+                          case "idle-header":
+                            items.push(
+                              <SidebarSectionHeader
+                                key="idle-shelf-header"
+                                marker="idle-header"
+                                label="Idle"
+                                count={activeThreads.length}
+                                toggle={{
+                                  expanded: idleShelfExpanded,
+                                  onToggle: toggleIdleShelf,
+                                }}
                               />,
                             );
                             break;

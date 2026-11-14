@@ -140,6 +140,48 @@ describe("the Agents shelf", () => {
   });
 });
 
+describe("the Idle shelf", () => {
+  it("folds the threads no agent is working on away", async () => {
+    using stack = new DisposableStack();
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS });
+    window.localStorage.removeItem("t3code:sidebar:idle-expanded");
+    vi.mocked(useProjects).mockReturnValue([project("active")]);
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: null,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: null,
+    });
+    vi.mocked(useQuietThreadShells).mockReturnValue([
+      makeThreadFixture({
+        id: ThreadId.make("thread-idle"),
+        environmentId: EnvironmentId.make("local"),
+        projectId: ProjectId.make("active"),
+        title: "Idle thread",
+      }),
+    ]);
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    const toggle = screen.getByTestId("sidebar-idle-shelf-toggle");
+    const row = screen.getByTestId("sidebar-row-card");
+    await expect.element(toggle).toHaveAttribute("aria-expanded", "true");
+    await vi.waitFor(() => expect(row.element().textContent).toContain("Idle thread"));
+
+    await userEvent.click(toggle);
+    await expect.element(toggle).toHaveAttribute("aria-expanded", "false");
+    await vi.waitFor(() => expect(row.query()).toBeNull());
+  });
+});
+
 describe("the project folder button", () => {
   it("folds and unfolds every project folder", async () => {
     using stack = new DisposableStack();
