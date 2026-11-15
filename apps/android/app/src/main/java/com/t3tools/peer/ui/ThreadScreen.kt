@@ -2,6 +2,7 @@ package com.t3tools.peer.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,9 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -57,18 +61,22 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
   val palette = LocalPeerPalette.current
   val listState = rememberLazyListState()
   val lines = viewModel.lines
+  val pending = viewModel.pendingLines
   val imeVisible = WindowInsets.isImeVisible
 
   // The system back button leaves the thread for the list, like the arrow does.
   BackHandler { viewModel.backToThreads() }
 
-  LaunchedEffect(lines.size, imeVisible) {
-    if (lines.isEmpty()) return@LaunchedEffect
+  LaunchedEffect(lines.size, pending.size, imeVisible) {
+    // The waiting messages sit after the chat, so the newest thing is either
+    // the last answer or the first message that waits.
+    val rows = lines.size + if (pending.isEmpty()) 0 else pending.size + 1
+    if (rows == 0) return@LaunchedEffect
     // The list measures the new rows after this effect starts, so wait for
     // them before asking for the last one.
-    snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it >= lines.size }
+    snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it >= rows }
     // The keyboard takes half the screen, so keep the newest line in view.
-    listState.scrollToItem(lines.lastIndex)
+    listState.scrollToItem((rows - 1).coerceAtLeast(0))
   }
 
   Surface(modifier = modifier.fillMaxSize(), color = palette.screen) {
@@ -80,8 +88,12 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
         // Back leaves the thread for the list, the way it always did.
         onBack = viewModel::backToThreads,
         onBranch = viewModel::showBranches,
+        showSubagents = viewModel.showSubagents,
+        onToggleSubagents = viewModel::toggleSubagents,
       )
-      SubagentList(viewModel.subagents)
+      if (viewModel.showSubagents) {
+        SubagentList(viewModel.subagents)
+      }
       LazyColumn(
         state = listState,
         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -89,10 +101,14 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
         items(lines, key = { it.id }) { line -> LineRow(line) }
+        if (pending.isNotEmpty()) {
+          item(key = "pending-header") { PendingHeader(pending.size) }
+          items(pending, key = { it.id }) { line -> PendingRow(line) }
+        }
       }
       Composer(
         value = viewModel.composer,
-        onValueChange = { viewModel.composer = it },
+        onValueChange = viewModel::onComposerChange,
         onSend = viewModel::send,
       )
     }
@@ -109,6 +125,8 @@ private fun ThreadHeader(
   branch: String,
   onBack: () -> Unit,
   onBranch: () -> Unit,
+  showSubagents: Boolean,
+  onToggleSubagents: () -> Unit,
 ) {
   val palette = LocalPeerPalette.current
   Row(
@@ -152,6 +170,83 @@ private fun ThreadHeader(
         modifier = Modifier.clickable(onClick = onBranch).padding(horizontal = 6.dp, vertical = 4.dp),
       )
     }
+    // The agents inside the thread are a detail of it, so they can be put away.
+    IconButton(onClick = onToggleSubagents) {
+      Icon(
+        if (showSubagents) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+        contentDescription = if (showSubagents) "Hide subagents" else "Show subagents",
+        tint = if (showSubagents) palette.muted else palette.foreground,
+      )
+    }
+  }
+}
+
+/**
+ * The messages the server holds but has not run yet. They wait at the end of
+ * the chat, apart from the turn items, so it is clear that nothing has
+ * answered them yet.
+ */
+@Composable
+private fun PendingHeader(count: Int) {
+  val palette = LocalPeerPalette.current
+  Column(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text(
+        "Pending",
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.warning,
+      )
+      Spacer(Modifier.width(6.dp))
+      Text(
+        "$count",
+        style = MaterialTheme.typography.labelSmall,
+        color = palette.muted,
+      )
+    }
+    Text(
+      "The server has these. No run has started them yet.",
+      style = MaterialTheme.typography.labelSmall,
+      color = palette.muted,
+    )
+  }
+}
+
+/** One waiting message, with the place it holds in the queue. */
+@Composable
+private fun PendingRow(line: ChatLine) {
+  val palette = LocalPeerPalette.current
+  Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Icon(
+        Icons.Filled.Schedule,
+        contentDescription = null,
+        tint = palette.muted,
+        modifier = Modifier.size(11.dp),
+      )
+      Spacer(Modifier.width(4.dp))
+      Text(
+        if (line.pendingPosition == 1) "Next" else "${line.pendingPosition} of ${line.pendingTotal}",
+        style = MaterialTheme.typography.labelSmall,
+        color = palette.muted,
+      )
+    }
+    Spacer(Modifier.height(3.dp))
+    Box(
+      modifier =
+        Modifier
+          .clip(RoundedCornerShape(16.dp))
+          .background(palette.grouped)
+          .border(1.dp, palette.border, RoundedCornerShape(16.dp))
+          .padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
+      MarkdownText(
+        text = line.text,
+        color = palette.muted,
+        fontSizeSp = 15f,
+        lineHeightSp = 21f,
+        codeBackground = palette.screen,
+      )
+    }
   }
 }
 
@@ -160,30 +255,21 @@ private fun LineRow(line: ChatLine) {
   val palette = LocalPeerPalette.current
   when (line.role) {
     ChatRole.USER ->
-      Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-        if (line.pending) {
-          // The server has it, but no run has started it yet.
-          Text(
-            "Queued",
-            style = MaterialTheme.typography.labelSmall,
-            color = palette.muted,
-            modifier = Modifier.padding(end = 4.dp, bottom = 2.dp),
-          )
-        }
-        Box(
-          modifier = Modifier
+      Box(
+        modifier =
+          Modifier
+            .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(if (line.pending) palette.grouped else palette.userBubble)
+            .background(palette.userBubble)
             .padding(horizontal = 14.dp, vertical = 10.dp),
-        ) {
-          MarkdownText(
-            text = line.text,
-            color = if (line.pending) palette.muted else palette.onUserBubble,
-            fontSizeSp = 15f,
-            lineHeightSp = 21f,
-            codeBackground = palette.grouped,
-          )
-        }
+      ) {
+        MarkdownText(
+          text = line.text,
+          color = palette.onUserBubble,
+          fontSizeSp = 15f,
+          lineHeightSp = 21f,
+          codeBackground = palette.grouped,
+        )
       }
 
     ChatRole.ASSISTANT ->

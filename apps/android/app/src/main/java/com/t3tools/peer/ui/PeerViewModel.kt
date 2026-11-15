@@ -45,8 +45,14 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     private set
   var lines by mutableStateOf(emptyList<ChatLine>())
     private set
+  /** The messages the server holds but has not run yet. */
+  var pendingLines by mutableStateOf(emptyList<ChatLine>())
+    private set
   /** The other agents working inside the open thread. */
   var subagents by mutableStateOf(emptyList<SubagentSummary>())
+    private set
+  /** Whether the agents inside a thread are shown. */
+  var showSubagents by mutableStateOf(store.showSubagents)
     private set
   /** The branch of the open thread, and the branches it can move to. */
   var branches by mutableStateOf(emptyList<BranchRef>())
@@ -56,8 +62,12 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   var composer by mutableStateOf("")
   var appearance by mutableStateOf(store.appearance)
   var settingsVisible by mutableStateOf(false)
+  /** True while the app reads everything again from the host. */
+  var resyncing by mutableStateOf(false)
+    private set
 
   private var session: PeerSession? = null
+  private var shellStream: Int? = null
   private var threadStream: Int? = null
   private var reconnectJob: Job? = null
   private var reconnectAttempts = 0
@@ -79,6 +89,47 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
 
   fun dismissError() {
     error = null
+  }
+
+  /**
+   * Reads everything again from the host. A subscription starts with a full
+   * snapshot, so a fresh one rebuilds the list from the server's own view of
+   * it. It is the way out of a session that missed something.
+   */
+  fun resync() {
+    val session = session ?: return
+    if (resyncing) return
+    resyncing = true
+    try {
+      closeShellStream()
+      threads = emptyList()
+      shellStream = session.subscribeShell(::onShellItem)
+      val thread = openThread
+      if (thread != null) {
+        closeThreadStream()
+        lineStore.clear()
+        lines = emptyList()
+        pendingLines = emptyList()
+        threadStream = session.subscribeThread(thread.id, ::onThreadItem)
+      }
+    } catch (failure: Exception) {
+      error = failure.message ?: "Could not resync."
+    } finally {
+      resyncing = false
+    }
+  }
+
+  /** Hides the agents inside a thread, or shows them again. */
+  fun toggleSubagents() {
+    showSubagents = !showSubagents
+    store.showSubagents = showSubagents
+  }
+
+  /** Keeps the words the user typed, so they are still there when they come back. */
+  fun onComposerChange(text: String) {
+    composer = text
+    val thread = openThread ?: return
+    store.setDraft(thread.id, text)
   }
 
   fun chooseAppearance(value: PeerAppearance) {
@@ -194,12 +245,14 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     reconnectJob?.cancel()
     reconnectJob = null
     connectionGeneration += 1
+    closeShellStream()
     closeThreadStream()
     session?.close()
     session = null
     threads = emptyList()
     openThread = null
     lines = emptyList()
+    pendingLines = emptyList()
     lineStore.clear()
     environmentLabel = ""
     screen = PeerScreen.CONNECT
@@ -218,6 +271,10 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     openThread = thread
     lineStore.clear()
     lines = emptyList()
+    pendingLines = emptyList()
+    // The words typed for this thread are still there, even after the app was
+    // closed or the thread was left.
+    composer = store.draft(thread.id)
     screen = PeerScreen.THREAD
     closeThreadStream()
     threadStream = session?.subscribeThread(thread.id, ::onThreadItem)
@@ -231,6 +288,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     messageStore.clear()
     subagentStore.clear()
     lines = emptyList()
+    pendingLines = emptyList()
     subagents = emptyList()
     screen = PeerScreen.THREADS
     closeThreadStream()
@@ -242,11 +300,18 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     threadStream = null
   }
 
+  /** The same for the thread list: a second stream would double every update. */
+  private fun closeShellStream() {
+    shellStream?.let { session?.unsubscribe(it) }
+    shellStream = null
+  }
+
   fun send() {
     val text = composer.trim()
     val thread = openThread ?: return
     if (text.isEmpty()) return
     composer = ""
+    store.setDraft(thread.id, "")
     viewModelScope.launch {
       try {
         session?.sendMessage(thread.id, text)
@@ -269,6 +334,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
       session?.close()
       session = opened
       threadStream = null
+      shellStream = null
       store.bearerToken = opened.bearerToken
       store.serverInput = serverInput
       codeInput = ""
@@ -277,7 +343,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
       environmentLabel = opened.environmentLabel
       threads = emptyList()
       screen = PeerScreen.THREADS
-      opened.subscribeShell(::onShellItem)
+      shellStream = opened.subscribeShell(::onShellItem)
     } catch (failure: Exception) {
       // The host may still be down, so keep trying.
       scheduleReconnect(failure.message ?: "Could not connect to the server.")
@@ -413,12 +479,13 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   /**
-   * The chat, with the messages no run has started yet at the end. They stay
+   * The chat, with the messages no run has started yet kept apart. They stay
    * apart from the turn items: a queued message turns into a turn item under
    * its own id, so keeping them together would show it twice.
    */
   private fun publishLines() {
-    lines = lineStore.values.toList() + pendingLines()
+    lines = lineStore.values.toList()
+    pendingLines = pendingLines()
   }
 
   private fun pendingLines(): List<ChatLine> =

@@ -18,7 +18,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +43,8 @@ fun ThreadListScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
     Column(modifier = Modifier.fillMaxSize()) {
       Header(
         environmentLabel = viewModel.environmentLabel,
+        resyncing = viewModel.resyncing,
+        onResync = viewModel::resync,
         onDisconnect = viewModel::disconnect,
         onSettings = viewModel::showSettings,
       )
@@ -68,7 +72,13 @@ fun ThreadListScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun Header(environmentLabel: String, onDisconnect: () -> Unit, onSettings: () -> Unit) {
+private fun Header(
+  environmentLabel: String,
+  resyncing: Boolean,
+  onResync: () -> Unit,
+  onDisconnect: () -> Unit,
+  onSettings: () -> Unit,
+) {
   val palette = LocalPeerPalette.current
   Row(
     modifier =
@@ -103,6 +113,21 @@ private fun Header(environmentLabel: String, onDisconnect: () -> Unit, onSetting
         overflow = TextOverflow.Ellipsis,
       )
       Spacer(Modifier.width(4.dp))
+    }
+    IconButton(onClick = onResync, enabled = !resyncing) {
+      if (resyncing) {
+        CircularProgressIndicator(
+          modifier = Modifier.size(16.dp),
+          strokeWidth = 2.dp,
+          color = palette.muted,
+        )
+      } else {
+        Icon(
+          Icons.Filled.Refresh,
+          contentDescription = "Resync",
+          tint = palette.muted,
+        )
+      }
     }
     IconButton(onClick = onDisconnect) {
       Icon(

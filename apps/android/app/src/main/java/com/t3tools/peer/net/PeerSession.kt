@@ -22,9 +22,9 @@ class PeerSession private constructor(
   /** The session token, so the app can come back without pairing again. */
   val bearerToken: String,
 ) {
-  fun subscribeShell(onItem: (JSONObject) -> Unit) {
+  /** Starts the live view of the thread list and returns the handle to stop it. */
+  fun subscribeShell(onItem: (JSONObject) -> Unit): Int =
     socket.stream(PeerProtocol.METHOD_SUBSCRIBE_SHELL, JSONObject(), onItem)
-  }
 
   /** Starts the live view of one thread and returns the handle to stop it. */
   fun subscribeThread(threadId: String, onItem: (JSONObject) -> Unit): Int =

@@ -47,6 +47,25 @@ class PeerStore(context: Context) {
     get() = PeerAppearance.fromStorage(preferences.getString(APPEARANCE_KEY, null))
     set(value) = commit { putString(APPEARANCE_KEY, value.storageValue) }
 
+  /** Whether the agents working inside a thread are shown. */
+  var showSubagents: Boolean
+    get() = preferences.getBoolean(SUBAGENTS_KEY, true)
+    set(value) = commit { putBoolean(SUBAGENTS_KEY, value) }
+
+  /**
+   * The words the user typed for a thread and did not send. They wait for the
+   * thread, so leaving it and coming back finds them where they were left.
+   */
+  fun draft(threadId: String): String = preferences.getString(draftKey(threadId), "").orEmpty()
+
+  fun setDraft(threadId: String, text: String) {
+    commit {
+      if (text.isBlank()) remove(draftKey(threadId)) else putString(draftKey(threadId), text)
+    }
+  }
+
+  private fun draftKey(threadId: String) = "$DRAFT_KEY_PREFIX$threadId"
+
   /**
    * Writes straight to disk. An update force-stops the app, and a write still
    * waiting in the queue would go with it, taking the pairing with it.
@@ -59,5 +78,7 @@ class PeerStore(context: Context) {
     const val SERVER_KEY = "server"
     const val TOKEN_KEY = "bearerToken"
     const val APPEARANCE_KEY = "appearance"
+    const val SUBAGENTS_KEY = "showSubagents"
+    const val DRAFT_KEY_PREFIX = "draft:"
   }
 }

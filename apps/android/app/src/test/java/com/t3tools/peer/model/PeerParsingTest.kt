@@ -119,6 +119,53 @@ class PeerParsingTest {
   }
 
   @Test
+  fun `a waiting message knows its place in the queue`() {
+    val projection =
+      JSONObject()
+        .put(
+          "runs",
+          JSONArray()
+            .put(run(id = "run-1", status = "queued", messageId = "message-1", ordinal = 1, queuePosition = 1))
+            .put(run(id = "run-2", status = "queued", messageId = "message-2", ordinal = 2, queuePosition = 2)),
+        )
+        .put(
+          "messages",
+          JSONArray()
+            .put(message(id = "message-1", role = "user", text = "Next"))
+            .put(message(id = "message-2", role = "user", text = "After that")),
+        )
+
+    val pending = PeerParsing.pendingLines(PeerParsing.runs(projection), PeerParsing.messages(projection))
+
+    assertEquals(listOf(1, 2), pending.map { it.pendingPosition })
+    assertEquals(listOf(2, 2), pending.map { it.pendingTotal })
+  }
+
+  @Test
+  fun `a message a run already took is not waiting`() {
+    val projection =
+      JSONObject()
+        .put(
+          "runs",
+          JSONArray()
+            .put(run(id = "run-1", status = "running", messageId = "message-1"))
+            .put(run(id = "run-2", status = "queued", messageId = "message-2")),
+        )
+        .put(
+          "messages",
+          JSONArray()
+            .put(message(id = "message-1", role = "user", text = "Running"))
+            .put(message(id = "message-2", role = "user", text = "Waiting")),
+        )
+
+    val pending = PeerParsing.pendingLines(PeerParsing.runs(projection), PeerParsing.messages(projection))
+
+    assertEquals(listOf("Waiting"), pending.map { it.text })
+    assertEquals(1, pending.single().pendingPosition)
+    assertEquals(1, pending.single().pendingTotal)
+  }
+
+  @Test
   fun `a guest's words stand in for the message`() {
     val projection =
       JSONObject()

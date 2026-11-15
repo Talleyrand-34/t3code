@@ -28,6 +28,10 @@ data class ChatLine(
   val streaming: Boolean,
   /** The server has the message, but no run has started it yet. */
   val pending: Boolean = false,
+  /** Where the message waits in the queue: 1 is the next one to run. */
+  val pendingPosition: Int = 0,
+  /** How many messages wait in total. */
+  val pendingTotal: Int = 0,
 )
 
 /** A run the server took but has not started. */
@@ -210,22 +214,28 @@ object PeerParsing {
    *
    * They stay apart from the turn items: a queued message turns into a turn
    * item under its own id, so keeping them together would show it twice.
+   *
+   * Each one knows its place in the queue, so the app can say which message
+   * runs next instead of leaving the user to guess.
    */
   fun pendingLines(runs: List<QueuedRun>, messages: List<PendingMessage>): List<ChatLine> {
     val byId = messages.associateBy { it.id }
-    return runs
-      .filter { it.status == "queued" }
-      .sortedWith(compareBy({ it.queuePosition ?: it.ordinal }, { it.ordinal }))
-      .mapNotNull { run ->
-        val message = byId[run.userMessageId] ?: return@mapNotNull null
-        ChatLine(
-          id = "pending:${run.id}",
-          role = ChatRole.USER,
-          text = message.text,
-          streaming = false,
-          pending = true,
-        )
-      }
+    val queued =
+      runs
+        .filter { it.status == "queued" }
+        .sortedWith(compareBy({ it.queuePosition ?: it.ordinal }, { it.ordinal }))
+        .mapNotNull { run -> byId[run.userMessageId]?.let { message -> run to message } }
+    return queued.mapIndexed { index, (run, message) ->
+      ChatLine(
+        id = "pending:${run.id}",
+        role = ChatRole.USER,
+        text = message.text,
+        streaming = false,
+        pending = true,
+        pendingPosition = index + 1,
+        pendingTotal = queued.size,
+      )
+    }
   }
 
   /** The other agents working inside a thread. */
