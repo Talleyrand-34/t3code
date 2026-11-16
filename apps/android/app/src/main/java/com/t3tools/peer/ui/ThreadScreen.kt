@@ -1,6 +1,8 @@
 package com.t3tools.peer.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,7 +34,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
@@ -47,12 +53,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.t3tools.peer.model.ChatLine
 import com.t3tools.peer.model.ChatRole
+import com.t3tools.peer.model.LocalAttachment
 import kotlinx.coroutines.flow.first
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -63,6 +71,14 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
   val lines = viewModel.lines
   val pending = viewModel.pendingLines
   val imeVisible = WindowInsets.isImeVisible
+  val context = LocalContext.current
+  // The picker gives back a stream the app can read; the image itself goes up
+  // with the message the user sends.
+  val picker =
+    rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+      if (uri == null) return@rememberLauncherForActivityResult
+      viewModel.readAttachment(context, uri)
+    }
 
   // The system back button leaves the thread for the list, like the arrow does.
   BackHandler { viewModel.backToThreads() }
@@ -110,6 +126,13 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
         value = viewModel.composer,
         onValueChange = viewModel::onComposerChange,
         onSend = viewModel::send,
+        attachments = viewModel.attachments,
+        onRemoveAttachment = viewModel::removeAttachment,
+        onAttach = { picker.launch("image/*") },
+        onStop = viewModel::stop,
+        canStop = viewModel.activeRunId != null,
+        canContinue = viewModel.resumableRunId != null || viewModel.holdsQueuedRuns,
+        onContinue = viewModel::continueThread,
       )
     }
   }
@@ -291,7 +314,18 @@ private fun LineRow(line: ChatLine) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit) {
+private fun Composer(
+  value: String,
+  onValueChange: (String) -> Unit,
+  onSend: () -> Unit,
+  attachments: List<LocalAttachment>,
+  onRemoveAttachment: (LocalAttachment) -> Unit,
+  onAttach: () -> Unit,
+  onStop: () -> Unit,
+  canStop: Boolean,
+  canContinue: Boolean,
+  onContinue: () -> Unit,
+) {
   val palette = LocalPeerPalette.current
   Surface(color = palette.screen) {
     Column(
@@ -302,14 +336,55 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
           .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
           .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
+      if (attachments.isNotEmpty()) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          attachments.forEach { attachment ->
+            Row(
+              modifier =
+                Modifier.clip(RoundedCornerShape(10.dp))
+                  .background(palette.grouped)
+                  .padding(start = 10.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                attachment.name,
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.foreground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              IconButton(onClick = { onRemoveAttachment(attachment) }) {
+                Icon(
+                  Icons.Filled.Close,
+                  contentDescription = "Remove ${attachment.name}",
+                  tint = palette.muted,
+                  modifier = Modifier.size(14.dp),
+                )
+              }
+            }
+          }
+        }
+      }
       Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .clip(RoundedCornerShape(24.dp))
-          .background(palette.composer)
-          .padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(palette.composer)
+            .padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.Bottom,
       ) {
+        IconButton(onClick = onAttach) {
+          Icon(
+            Icons.Filled.AttachFile,
+            contentDescription = "Attach files",
+            tint = palette.muted,
+            modifier = Modifier.size(18.dp),
+          )
+        }
         Box(modifier = Modifier.weight(1f).padding(vertical = 10.dp)) {
           if (value.isEmpty()) {
             Text(
@@ -327,20 +402,53 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
             modifier = Modifier.fillMaxWidth(),
           )
         }
-        Box(
-          modifier = Modifier
-            .size(38.dp)
-            .clip(CircleShape)
-            .background(if (value.isBlank()) palette.grouped else palette.primary)
-            .clickable(enabled = value.isNotBlank(), onClick = onSend),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            Icons.AutoMirrored.Filled.Send,
-            contentDescription = "Send",
-            tint = if (value.isBlank()) palette.muted else palette.onPrimary,
-            modifier = Modifier.size(18.dp),
-          )
+        when {
+          canStop ->
+            Box(
+              modifier =
+                Modifier.size(38.dp).clip(CircleShape).background(palette.danger).clickable(onClick = onStop),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                Icons.Filled.Stop,
+                contentDescription = "Stop",
+                tint = palette.screen,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+
+          canContinue ->
+            Box(
+              modifier =
+                Modifier.size(38.dp).clip(CircleShape).background(palette.primary).clickable(onClick = onContinue),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = "Continue",
+                tint = palette.onPrimary,
+                modifier = Modifier.size(18.dp),
+              )
+            }
+
+          else ->
+            Box(
+              modifier =
+                Modifier
+                  .size(38.dp)
+                  .clip(CircleShape)
+                  .background(if (value.isBlank() && attachments.isEmpty()) palette.grouped else palette.primary)
+                  .clickable(enabled = value.isNotBlank() || attachments.isNotEmpty(), onClick = onSend),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                Icons.AutoMirrored.Filled.Send,
+                contentDescription = "Send",
+                tint =
+                  if (value.isBlank() && attachments.isEmpty()) palette.muted else palette.onPrimary,
+                modifier = Modifier.size(18.dp),
+              )
+            }
         }
       }
     }

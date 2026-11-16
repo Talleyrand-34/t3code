@@ -187,6 +187,16 @@ class PeerParsingTest {
   }
 
   @Test
+  fun `a run the server holds says so`() {
+    val held =
+      PeerParsing.run(run(id = "run-1", status = "queued", messageId = "message-1").put("queueHeld", true))
+    val plain = PeerParsing.run(run(id = "run-2", status = "queued", messageId = "message-2"))
+
+    assertEquals(true, held?.queueHeld)
+    assertEquals(false, plain?.queueHeld)
+  }
+
+  @Test
   fun `a subagent is not a thread of the list`() {
     val subagent = thread(id = "thread-1", lineage = lineage(relationship = "subagent"))
 

@@ -1,6 +1,10 @@
 package com.t3tools.peer.ui
 
 import android.app.Application
+import android.content.ContentResolver
+import android.content.Context
+import android.net.Uri
+import android.util.Base64
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -10,6 +14,7 @@ import com.t3tools.peer.data.PeerStore
 import com.t3tools.peer.model.BranchRef
 import com.t3tools.peer.model.ChatLine
 import com.t3tools.peer.model.ChatRole
+import com.t3tools.peer.model.LocalAttachment
 import com.t3tools.peer.model.PeerAppearance
 import com.t3tools.peer.model.PeerParsing
 import com.t3tools.peer.model.PendingMessage
@@ -23,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.UUID
 
 enum class PeerScreen { CONNECT, THREADS, THREAD }
 
@@ -48,6 +54,18 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   /** The messages the server holds but has not run yet. */
   var pendingLines by mutableStateOf(emptyList<ChatLine>())
     private set
+  /** The images the user attached to the message they are writing. */
+  var attachments by mutableStateOf(emptyList<LocalAttachment>())
+    private set
+  /** The run the thread is working on, while one is. */
+  var activeRunId by mutableStateOf<String?>(null)
+    private set
+  /** The run that was interrupted and can be continued. */
+  var resumableRunId by mutableStateOf<String?>(null)
+    private set
+  /** Whether the thread holds turns it has not started. */
+  var holdsQueuedRuns by mutableStateOf(false)
+    private set
   /** The other agents working inside the open thread. */
   var subagents by mutableStateOf(emptyList<SubagentSummary>())
     private set
@@ -69,6 +87,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   private var session: PeerSession? = null
   private var shellStream: Int? = null
   private var threadStream: Int? = null
+  private var draftSaveJob: Job? = null
   private var reconnectJob: Job? = null
   private var reconnectAttempts = 0
   private var connectionGeneration = 0
@@ -129,7 +148,104 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   fun onComposerChange(text: String) {
     composer = text
     val thread = openThread ?: return
-    store.setDraft(thread.id, text)
+    // The store writes to disk, so it waits for the typing to settle.
+    draftSaveJob?.cancel()
+    draftSaveJob = viewModelScope.launch {
+      delay(DRAFT_SAVE_DELAY_MS)
+      store.setDraft(thread.id, text)
+    }
+  }
+
+  /** Adds an image the user picked to the message they are writing. */
+  fun attachImage(attachment: LocalAttachment) {
+    if (attachments.size >= MAX_ATTACHMENTS) {
+      error = "You can attach up to $MAX_ATTACHMENTS images to a message."
+      return
+    }
+    attachments = attachments + attachment
+  }
+
+  /**
+   * Reads the image the user picked. The host keeps the picture with the
+   * message, so it travels as a data URL.
+   */
+  fun readAttachment(context: Context, uri: Uri) {
+    viewModelScope.launch {
+      try {
+        val resolver = context.contentResolver
+        val mimeType = resolver.getType(uri) ?: "image/png"
+        val stream = resolver.openInputStream(uri)
+          ?: throw IllegalStateException("Could not read the image.")
+        val bytes = stream.use { it.readBytes() }
+        if (bytes.size > MAX_ATTACHMENT_BYTES) {
+          error = "That image is too large to send."
+          return@launch
+        }
+        val name = queryDisplayName(resolver, uri) ?: "image"
+        attachImage(
+          LocalAttachment(
+            name = name,
+            mimeType = mimeType,
+            sizeBytes = bytes.size.toLong(),
+            dataUrl = "data:$mimeType;base64,${Base64.encodeToString(bytes, Base64.NO_WRAP)}",
+          ),
+        )
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not attach the image."
+      }
+    }
+  }
+
+  /** The name the picker gave the file, so the user recognizes it. */
+  private fun queryDisplayName(resolver: ContentResolver, uri: Uri): String? {
+    resolver.query(uri, null, null, null, null)?.use { cursor ->
+      val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+      if (index >= 0 && cursor.moveToFirst()) return cursor.getString(index)
+    }
+    return null
+  }
+
+  /** Takes an attached image back off the message. */
+  fun removeAttachment(attachment: LocalAttachment) {
+    attachments = attachments.filterNot { it === attachment }
+  }
+
+  /** The id a message carries, so the host can keep the images with it. */
+  private fun messageId(): String = UUID.randomUUID().toString()
+
+  /** Stops the turn the thread is working on. */
+  fun stop() {
+    val thread = openThread ?: return
+    val runId = activeRunId ?: return
+    viewModelScope.launch {
+      try {
+        session?.interruptRun(thread.id, runId)
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not stop the thread."
+      }
+    }
+  }
+
+  /**
+   * Goes on with the turn the thread interrupted, without the user writing
+   * anything. It also releases the turns the host is holding.
+   */
+  fun continueThread() {
+    val thread = openThread ?: return
+    val resumable = resumableRunId
+    viewModelScope.launch {
+      try {
+        val session = session ?: return@launch
+        if (resumable == null) {
+          session.resumeQueue(thread.id)
+          return@launch
+        }
+        session.sendMessage(thread.id, messageId(), CONTINUE_TEXT, emptyList(), resumable)
+        if (holdsQueuedRuns) session.resumeQueue(thread.id)
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not continue the thread."
+      }
+    }
   }
 
   fun chooseAppearance(value: PeerAppearance) {
@@ -309,12 +425,18 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   fun send() {
     val text = composer.trim()
     val thread = openThread ?: return
-    if (text.isEmpty()) return
+    if (text.isEmpty() && attachments.isEmpty()) return
+    val pending = attachments
     composer = ""
+    attachments = emptyList()
     store.setDraft(thread.id, "")
     viewModelScope.launch {
       try {
-        session?.sendMessage(thread.id, text)
+        val session = session ?: return@launch
+        val messageId = messageId()
+        // The host keeps the images with the message, so they go up first.
+        val stored = pending.map { session.uploadAttachment(thread.id, messageId, it) }
+        session.sendMessage(thread.id, messageId, text, stored)
       } catch (failure: Exception) {
         error = failure.message ?: "Could not send the message."
       }
@@ -486,6 +608,18 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   private fun publishLines() {
     lines = lineStore.values.toList()
     pendingLines = pendingLines()
+    publishRuns()
+  }
+
+  /**
+   * What the thread can be asked to do right now: stop the turn it is working
+   * on, or go on with the one it interrupted.
+   */
+  private fun publishRuns() {
+    val runs = runStore.values.sortedBy { it.ordinal }
+    activeRunId = runs.lastOrNull { it.status in LIVE_RUN_STATUSES }?.id
+    resumableRunId = runs.lastOrNull { it.status == "interrupted" }?.id
+    holdsQueuedRuns = runs.any { it.status == "queued" && it.queueHeld }
   }
 
   private fun pendingLines(): List<ChatLine> =
@@ -534,7 +668,28 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   override fun onCleared() {
     super.onCleared()
     // The app is gone, so the socket has nothing to talk to.
+    draftSaveJob?.cancel()
     session?.close()
     session = null
+  }
+
+  private companion object {
+    /**
+     * The runs the thread is working on. A run waiting for approval still holds
+     * the turn, so it can be stopped too.
+     */
+    val LIVE_RUN_STATUSES = setOf("running", "waiting", "starting", "preparing")
+
+    /** What the app writes when the user goes on with a turn themselves. */
+    const val CONTINUE_TEXT = "Continue where you left off."
+
+    /** How many images one message may carry. */
+    const val MAX_ATTACHMENTS = 8
+
+    /** The largest image the host takes. */
+    const val MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+    /** How long the typing has to settle before the draft goes to disk. */
+    const val DRAFT_SAVE_DELAY_MS = 400L
   }
 }

@@ -41,6 +41,16 @@ data class QueuedRun(
   val status: String,
   val ordinal: Int,
   val queuePosition: Int?,
+  /** The server holds this turn until the thread is told to go on. */
+  val queueHeld: Boolean = false,
+)
+
+/** An image the user attached, before the host has it. */
+data class LocalAttachment(
+  val name: String,
+  val mimeType: String,
+  val sizeBytes: Long,
+  val dataUrl: String,
 )
 
 /** A message the user sent that the server keeps for a later run. */
@@ -178,6 +188,7 @@ object PeerParsing {
       status = run.optString("status"),
       ordinal = run.optInt("ordinal", 0),
       queuePosition = if (run.isNull("queuePosition")) null else run.optInt("queuePosition"),
+      queueHeld = run.optBoolean("queueHeld"),
     )
   }
 

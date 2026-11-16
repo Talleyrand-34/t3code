@@ -1,6 +1,7 @@
 package com.t3tools.peer.net
 
 import com.t3tools.peer.model.BranchRef
+import com.t3tools.peer.model.LocalAttachment
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import okhttp3.OkHttpClient
@@ -39,7 +40,13 @@ class PeerSession private constructor(
     socket.cancel(requestId)
   }
 
-  suspend fun sendMessage(threadId: String, text: String) {
+  suspend fun sendMessage(
+    threadId: String,
+    messageId: String,
+    text: String,
+    attachments: List<JSONObject> = emptyList(),
+    manualContinuationOfRunId: String? = null,
+  ) {
     val command =
       JSONObject()
         .put("type", "message.dispatch")
@@ -47,11 +54,67 @@ class PeerSession private constructor(
         .put("createdBy", "user")
         .put("creationSource", "mobile")
         .put("threadId", threadId)
-        .put("messageId", UUID.randomUUID().toString())
+        .put("messageId", messageId)
         .put("text", text)
-        .put("attachments", org.json.JSONArray())
+        .put("attachments", org.json.JSONArray(attachments))
         .put("dispatchMode", JSONObject().put("type", "start_immediately"))
+    if (manualContinuationOfRunId != null) {
+      command.put("manualContinuationOfRunId", manualContinuationOfRunId)
+    }
     socket.call(PeerProtocol.METHOD_DISPATCH_COMMAND, command)
+  }
+
+  /**
+   * Hands the image to the host, which keeps it with the message. The host
+   * answers with the attachment it stored, which the message then names.
+   */
+  suspend fun uploadAttachment(
+    threadId: String,
+    messageId: String,
+    attachment: LocalAttachment,
+  ): JSONObject {
+    val result =
+      socket.call(
+        PeerProtocol.METHOD_PERSIST_ATTACHMENTS,
+        JSONObject()
+          .put("threadId", threadId)
+          .put("messageId", messageId)
+          .put(
+            "attachments",
+            org.json.JSONArray().put(
+              JSONObject()
+                .put("type", "image")
+                .put("name", attachment.name)
+                .put("mimeType", attachment.mimeType)
+                .put("sizeBytes", attachment.sizeBytes)
+                .put("dataUrl", attachment.dataUrl),
+            ),
+          ),
+      )
+    return result.optJSONArray("attachments")?.optJSONObject(0) ?: JSONObject()
+  }
+
+  /** Stops the run the thread is working on. */
+  suspend fun interruptRun(threadId: String, runId: String) {
+    socket.call(
+      PeerProtocol.METHOD_DISPATCH_COMMAND,
+      JSONObject()
+        .put("type", "run.interrupt")
+        .put("commandId", UUID.randomUUID().toString())
+        .put("threadId", threadId)
+        .put("runId", runId),
+    )
+  }
+
+  /** Releases the turns the thread is holding. */
+  suspend fun resumeQueue(threadId: String) {
+    socket.call(
+      PeerProtocol.METHOD_DISPATCH_COMMAND,
+      JSONObject()
+        .put("type", "queue.resume")
+        .put("commandId", UUID.randomUUID().toString())
+        .put("threadId", threadId),
+    )
   }
 
   /** The branches and tags the host knows about in a checkout. */
