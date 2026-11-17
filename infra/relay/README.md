@@ -20,7 +20,7 @@ The relay currently owns:
 - Provisioning and tracking managed environment endpoints.
 - Issuing short-lived credentials used to connect clients to linked environments.
 - Listing linked environments and registered mobile devices for an account.
-- Registering mobile notification preferences and APNs or FCM tokens.
+- Registering mobile notification preferences and APNs tokens.
 - Receiving published agent activity and delivering notifications or Live Activity updates.
 - Persisting relay state and exposing relay-specific traces for diagnostics.
 
@@ -37,7 +37,7 @@ credential, or authorization behavior.
 - [`src/environments`](./src/environments) contains environment linking, credentials, endpoint
   provisioning, and connection flows.
 - [`src/agentActivity`](./src/agentActivity) contains mobile device registration, activity state,
-  APNs and FCM delivery, and queue processing.
+  APNs delivery and queue processing. Android reads its agent activity by polling.
 - [`src/auth`](./src/auth) contains relay token and DPoP proof handling.
 - [`src/persistence/schema.ts`](./src/persistence/schema.ts) defines persisted relay state. Keep
   schema and migration changes together.
@@ -86,7 +86,7 @@ vp run --filter t3code-relay deploy
 The stack provisions the Cloudflare Worker and queues, managed endpoint resources, database
 connectivity, and relay tracing resources. Copy [`infra/relay/.env.example`](./.env.example) to
 `infra/relay/.env` and fill in the deployment-specific values before deploying. Alchemy loads that
-file from the relay directory. Runtime secrets include Clerk, APNs, and optional FCM credentials. Set
+file from the relay directory. Runtime secrets include Clerk and APNs credentials. Set
 `APNS_ENABLED=false` for an Android-only development deployment without Apple credentials. Production adopts
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
@@ -159,7 +159,6 @@ The `production` GitHub environment must define these Actions secrets:
 
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
-- `FCM_SERVICE_ACCOUNT` when Android push is enabled
 - `T3CHAT_LINK_SECRET`, optional, shared with T3 Chat's `T3CODE_LINK_SECRET`. Without it the
   T3 Chat account link is off. Local and preview stages can set `T3CHAT_URL` to point
   at another T3 Chat deployment; production uses `https://t3.chat`.

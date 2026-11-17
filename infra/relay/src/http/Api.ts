@@ -777,13 +777,16 @@ export const layerMobileApi = HttpApiBuilder.group(
       )
       .handle(
         "getAgentActivitySnapshot",
-        Effect.fn("relay.api.mobile.getAgentActivitySnapshot")(function* () {
+        Effect.fn("relay.api.mobile.getAgentActivitySnapshot")(function* (args) {
           const { userId, token } = yield* RelayClientPrincipal;
           const proofKeyThumbprint = yield* requireDpopPrincipalScope("mobile:registration");
           yield* requireDpopThumbprint(proofKeyThumbprint, {
             expectedAccessToken: token,
           }).pipe(Effect.provideService(DpopProofs.DpopProofReplay, dpopProofs));
-          return yield* registrations.getAgentActivitySnapshot({ userId });
+          return yield* registrations.getAgentActivitySnapshot({
+            userId,
+            deviceId: args.params.deviceId,
+          });
         }, mapRelayCommonApiErrors("invalid_dpop")),
       )
       .handle(
@@ -1320,12 +1323,6 @@ export const layerServerApi = HttpApiBuilder.group(
               traceId,
             }),
           ApnsDeliveryQueueSendError: (_error, traceId) =>
-            new RelayInternalError({
-              code: "internal_error",
-              reason: "upstream_unavailable",
-              traceId,
-            }),
-          FcmDeliveryError: (_error, traceId) =>
             new RelayInternalError({
               code: "internal_error",
               reason: "upstream_unavailable",

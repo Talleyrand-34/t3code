@@ -26,6 +26,12 @@ class T3AgentNotificationsModule : Module() {
       appContext.reactContext?.let { AgentNotifications.clear(it) }
     }
 
+    // Renders an agent activity payload that arrived over the app's own connection, so
+    // notifications work without a push transport.
+    Function("deliver") { data: Map<String, String> ->
+      appContext.reactContext?.let { AgentNotifications.receive(it, data) }
+    }
+
     Function("showShowcaseActivity") { scheme: String, data: Map<String, String> ->
       appContext.reactContext?.let { AgentNotifications.showcase(it, scheme, data) }
     }

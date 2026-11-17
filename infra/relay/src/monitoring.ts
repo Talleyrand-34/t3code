@@ -105,7 +105,7 @@ const relayMonitors: ReadonlyArray<RelayMonitor> = [
     query: (dataset) =>
       [
         `['${dataset}']`,
-        `| where name in ("relay.apns_deliveries.process_signed_job", "relay.fcm.process")`,
+        `| where name in ("relay.apns_deliveries.process_signed_job")`,
         `| summarize total = count(), failed = countif(error == true)`,
         `| project failure_pct = iff(total >= 100, 100.0 * failed / total, 0.0)`,
       ].join("\n"),
@@ -267,7 +267,7 @@ const relayDashboardCharts = (dataset: string): ReadonlyArray<QueryChart> => {
     timeSeries(
       "push",
       "Push delivery jobs",
-      `${source}\n| where name in ("relay.apns_deliveries.process_signed_job", "relay.fcm.process")\n| summarize delivered = countif(error != true), failed = countif(error == true) by bin_auto(_time), service = iff(name == "relay.fcm.process", "fcm", "apns")`,
+      `${source}\n| where name in ("relay.apns_deliveries.process_signed_job")\n| summarize delivered = countif(error != true), failed = countif(error == true) by bin_auto(_time), service = "apns"`,
     ),
     timeSeries(
       "tunnel-cleanup",

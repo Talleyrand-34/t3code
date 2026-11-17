@@ -297,9 +297,6 @@ const config: ExpoConfig = {
   android: {
     icon: variant.assets.appIcon,
     package: variant.androidPackage,
-    ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
-      ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
-      : {}),
     adaptiveIcon: {
       backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
       ...(variant.assets.androidAdaptiveBackgroundImage
@@ -311,7 +308,13 @@ const config: ExpoConfig = {
     // JS back dispatch needs RN's Android 16 shim and withAndroidPredictiveBackCompat on Android 13-15.
     predictiveBackGestureEnabled: true,
     // expo-sensors declares this for its pedometer, which the app does not use.
-    blockedPermissions: ["android.permission.ACTIVITY_RECOGNITION"],
+    // SYSTEM_ALERT_WINDOW is an unused template permission, and WRITE_EXTERNAL_STORAGE
+    // is capped at maxSdkVersion 32, so it is never grantable on a device we support.
+    blockedPermissions: [
+      "android.permission.ACTIVITY_RECOGNITION",
+      "android.permission.SYSTEM_ALERT_WINDOW",
+      "android.permission.WRITE_EXTERNAL_STORAGE",
+    ],
     intentFilters: [
       {
         action: "VIEW",
@@ -431,10 +434,17 @@ const config: ExpoConfig = {
       {
         android: {
           minSdkVersion: 24,
+          // RN stores the Hermes bundle uncompressed so it can be memory-mapped at startup. The
+          // bundle is the largest single asset in the APK and deflates 2.5x, so compress it.
+          enableBundleCompression: true,
           // SDK 58 lacks Kotlin 2.3's runtime-inert annotation. R8 needs explicit InputMerger constructors for widgets.
           extraProguardRules: [
             "-dontwarn kotlin.MustUseReturnValues",
             "-keep class * extends androidx.work.InputMerger { <init>(); }",
+            // Google Play Services and Firebase are excluded from the build; third-party
+            // libraries still reference their types, and nothing calls them at runtime.
+            "-dontwarn com.google.android.gms.**",
+            "-dontwarn com.google.firebase.**",
           ].join("\n"),
         },
         ios: {
@@ -453,6 +463,7 @@ const config: ExpoConfig = {
     // Mods run in reverse order; expo-widgets must create and wipe the target before assets are added.
     ...(!isIosPersonalTeamBuild ? ["./plugins/withWidgetLogoAsset.cjs", widgetsPlugin] : []),
     "./plugins/withAndroidNetworkSecurityConfig.cjs",
+    "./plugins/withAndroidGoogleServices.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
     "./plugins/withAndroidInputBackground.cjs",
     "./plugins/withAndroidModernPopupMenu.cjs",

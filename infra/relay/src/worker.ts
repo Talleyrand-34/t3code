@@ -43,18 +43,7 @@ import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "./environments/ManagedEndpointAllocations.ts";
 import * as LiveActivities from "./agentActivity/LiveActivities.ts";
 import * as RelayDb from "./db.ts";
-import {
-  RelayApnsDeliveryDeadLetterQueue,
-  RelayApnsDeliveryQueue,
-  RelayFcmDeliveryQueue,
-  RelayFcmDeliveryDeadLetterQueue,
-} from "./queues.ts";
-import * as WebCrypto from "./WebCrypto.ts";
-import * as FcmAssertionSigner from "./agentActivity/FcmAssertionSigner.ts";
-import * as FcmClient from "./agentActivity/FcmClient.ts";
-import * as FcmDeliveryQueueSender from "./agentActivity/FcmDeliveryQueueSender.ts";
-import * as FcmDeliveries from "./agentActivity/FcmDeliveries.ts";
-import * as FcmDeliveryQueueConsumer from "./agentActivity/FcmDeliveryQueueConsumer.ts";
+import { RelayApnsDeliveryDeadLetterQueue, RelayApnsDeliveryQueue } from "./queues.ts";
 import * as RelayConfiguration from "./Config.ts";
 import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
 import * as ApnsClient from "./agentActivity/ApnsClient.ts";
@@ -133,8 +122,6 @@ export const layer = Api.make(
     const { relayPublicOrigin, stage } = yield* RelayDeploymentConfig;
     const apnsDeliveryQueue = yield* RelayApnsDeliveryQueue;
     const apnsDeliveryDeadLetterQueue = yield* RelayApnsDeliveryDeadLetterQueue;
-    const fcmDeliveryQueue = yield* RelayFcmDeliveryQueue;
-    const fcmDeliveryDeadLetterQueue = yield* RelayFcmDeliveryDeadLetterQueue;
     const cloudMintKeyPair = yield* CloudMintKeyPair;
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
@@ -151,15 +138,8 @@ export const layer = Api.make(
           privateKey: yield* Config.Redacted("APNS_PRIVATE_KEY"),
         }
       : null;
-    const fcmServiceAccount = Option.getOrUndefined(
-      Option.filter(
-        yield* Config.option(Config.Redacted("FCM_SERVICE_ACCOUNT")),
-        (value) => Redacted.value(value).trim().length > 0,
-      ),
-    );
     const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
     const apnsDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(apnsDeliveryQueue);
-    const fcmDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(fcmDeliveryQueue);
 
     const clerkSecretKey = yield* Config.Redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.String("CLERK_PUBLISHABLE_KEY");
@@ -230,7 +210,6 @@ export const layer = Api.make(
     const loadSettings = Effect.gen(function* () {
       return RelayConfiguration.RelayConfiguration.of({
         relayIssuer: relayPublicOrigin,
-        ...(fcmServiceAccount ? { fcmServiceAccount } : {}),
         apns: apnsCredentials,
         apnsDeliveryJobSigningSecret: yield* apnsDeliveryJobSigningSecret,
         clerkSecretKey,
@@ -303,28 +282,6 @@ export const layer = Api.make(
       ),
       Layer.provideMerge(DpopProofs.layer),
       Layer.provideMerge(ApnsDeliveries.layer),
-      Layer.provideMerge(
-        FcmDeliveries.layer.pipe(
-          Layer.provide(
-            Layer.succeed(FcmDeliveryQueueSender.FcmDeliveryQueueSender, {
-              send: Effect.fn("FcmDeliveryQueueSender.send")(
-                function* (body) {
-                  return yield* fcmDeliveryQueueSender.send(body);
-                },
-                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-              ),
-            }),
-          ),
-          Layer.provideMerge(
-            FcmClient.layer.pipe(
-              Layer.provide(FcmAssertionSigner.layer),
-              Layer.provide(
-                Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle }),
-              ),
-            ),
-          ),
-        ),
-      ),
       Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
       Layer.provideMerge(
         ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
@@ -456,23 +413,6 @@ export const layer = Api.make(
               Effect.withSpan("relay.apn_delivery_queue.process_message"),
             ),
           ),
-          Effect.provide(layerRuntime),
-        ),
-    );
-
-    yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
-      fcmDeliveryQueue,
-      {
-        batchSize: 10,
-        maxRetries: 5,
-        maxWaitTime: "1 second",
-        retryDelay: "30 seconds",
-        deadLetterQueue: fcmDeliveryDeadLetterQueue.queueName as unknown as string,
-      },
-      (stream) =>
-        stream.pipe(
-          Stream.withSpan("relay.fcm_delivery_queue.process_batch"),
-          Stream.runForEach(FcmDeliveryQueueConsumer.processMessage),
           Effect.provide(layerRuntime),
         ),
     );

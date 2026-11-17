@@ -1047,6 +1047,11 @@ export const RelayRegisterLiveActivityEndpoint = HttpApiEndpoint.post(
 
 export const RelayAgentActivitySnapshotResponse = Schema.Struct({
   aggregate: Schema.NullOr(RelayAgentActivityAggregateState),
+  /**
+   * The agent activity the asking device renders, in the shape the native notification
+   * handler reads. It is absent when the request names no device.
+   */
+  payload: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
 export type RelayAgentActivitySnapshotResponse = typeof RelayAgentActivitySnapshotResponse.Type;
 
@@ -1055,6 +1060,10 @@ export const RelayAgentActivitySnapshotEndpoint = HttpApiEndpoint.get(
   "/v1/mobile/agent-activity",
   {
     headers: RelayDpopRequestHeaders,
+    params: Schema.Struct({
+      /** The device the payload is for. Without it the snapshot carries no payload. */
+      deviceId: Schema.optional(Schema.String),
+    }),
     success: RelayAgentActivitySnapshotResponse,
     error: RelayAuthAndInternalErrors,
   },

@@ -12,13 +12,16 @@ import * as Layer from "effect/Layer";
 import * as AgentActivityRows from "./AgentActivityRows.ts";
 import * as Devices from "./Devices.ts";
 import * as LiveActivities from "./LiveActivities.ts";
+import { buildDevicePayload } from "./agentActivityDelivery.ts";
 import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
 
 export type MobileRegistrationError =
   | Devices.DeviceRegistrationPersistenceError
   | Devices.DeviceUnregistrationPersistenceError
   | LiveActivities.LiveActivityRegistrationPersistenceError
-  | AgentActivityRows.AgentActivityRowListPersistenceError;
+  | AgentActivityRows.AgentActivityRowListPersistenceError
+  | LiveActivities.LiveActivityTargetListPersistenceError
+  | LiveActivities.LiveActivityDeliveryMarkPersistenceError;
 
 export class MobileRegistrations extends Context.Service<
   MobileRegistrations,
@@ -37,6 +40,8 @@ export class MobileRegistrations extends Context.Service<
     }) => Effect.Effect<{ readonly ok: true }, MobileRegistrationError>;
     readonly getAgentActivitySnapshot: (input: {
       readonly userId: string;
+      /** The device the payload is for. Without it the snapshot carries no payload. */
+      readonly deviceId?: string | undefined;
     }) => Effect.Effect<RelayAgentActivitySnapshotResponse, MobileRegistrationError>;
   }
 >()("t3code-relay/agentActivity/MobileRegistrations") {}
@@ -95,13 +100,35 @@ const make = Effect.gen(function* () {
       function* (input) {
         const activeStates = yield* rows.listForUser({ userId: input.userId });
         const now = yield* DateTime.now;
-        return {
-          aggregate: makeAggregateState({
-            activeStates,
-            terminalState: null,
-            nowMs: now.epochMilliseconds,
-          }),
-        };
+        const aggregate = makeAggregateState({
+          activeStates,
+          terminalState: null,
+          nowMs: now.epochMilliseconds,
+        });
+        if (!input.deviceId) return { aggregate };
+        // The payload is the device's own view: its preferences and its delivery baseline.
+        const targets = yield* liveActivities.listTargets({ userId: input.userId });
+        const target = targets.find((row) => row.device_id === input.deviceId);
+        if (!target) return { aggregate };
+        const payload = buildDevicePayload({
+          userId: input.userId,
+          deviceId: target.device_id,
+          preferencesJson: target.preferences_json,
+          previousAggregateJson: target.last_aggregate_json,
+          aggregate,
+          nowMs: now.epochMilliseconds,
+        });
+        if (!payload) return { aggregate };
+        yield* liveActivities
+          .markDelivery({
+            userId: input.userId,
+            deviceId: target.device_id,
+            kind: "live_activity_update",
+            aggregate,
+            deliveredAt: DateTime.formatIso(now),
+          })
+          .pipe(Effect.ignore);
+        return { aggregate, payload };
       },
     ),
     unregisterDevice: Effect.fn("relay.mobile_registrations.unregister_device")(function* (input) {
