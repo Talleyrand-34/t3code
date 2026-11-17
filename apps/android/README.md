@@ -73,6 +73,22 @@ The APK lands in `app/build/outputs/apk/debug/app-debug.apk`. Install it with
 `adb install -r app/build/outputs/apk/debug/app-debug.apk`, or copy it to the
 phone and open it there.
 
+For a build that goes on a phone, use the release variant:
+
+```bash
+ANDROID_HOME=/path/to/android-sdk ./gradlew assembleRelease
+```
+
+It lands in `app/build/outputs/apk/release/app-release.apk`. The release variant
+is signed only when this machine holds a keystore for it: point
+`t3code.android.keystore`, `t3code.android.storePassword`,
+`t3code.android.keyAlias` and `t3code.android.keyPassword` in
+`~/.gradle/gradle.properties` (or the same names as `T3CODE_ANDROID_*`
+environment variables). Without a keystore the APK comes out unsigned, which
+only matters for an artifact that leaves the machine. Keep the keystore: a
+later build signed with another key cannot replace an installed one, and
+Android then asks for the app to be removed first, which clears the pairing.
+
 The `-r` matters: it replaces the app instead of removing it first, so the
 pairing survives the update. The one thing that does clear the pairing is
 removing the app, which Android also demands when the new APK is signed with a
