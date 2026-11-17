@@ -142,6 +142,19 @@ function bucketKey(bucket: UsageBucket): string {
   ]);
 }
 
+/**
+ * A model's identity: the harness that ran it, the upstream that served it and
+ * the model itself. One shape, so every layer that groups models by identity
+ * groups them the same way.
+ */
+export function usageModelKey(model: {
+  readonly provider: string;
+  readonly upstreamProvider?: string | undefined;
+  readonly model: string;
+}): string {
+  return JSON.stringify([model.provider, model.upstreamProvider ?? null, model.model]);
+}
+
 function claimSources(environments: readonly EnvironmentUsage[]): {
   readonly ownerByFingerprint: ReadonlyMap<string, EnvironmentId>;
   readonly supplementalBucketsByEnvironment: ReadonlyMap<EnvironmentId, ReadonlySet<UsageBucket>>;
@@ -447,7 +460,7 @@ export function mergeUsage(
       provider.records += bucket.records;
       providerAccumulator.set(bucket.provider, provider);
 
-      const modelKey = `${bucket.provider} ${bucket.upstreamProvider ?? ""} ${bucket.model}`;
+      const modelKey = usageModelKey(bucket);
       const model = modelAccumulator.get(modelKey) ?? {
         provider: bucket.provider,
         ...(bucket.upstreamProvider ? { upstreamProvider: bucket.upstreamProvider } : {}),

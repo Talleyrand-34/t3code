@@ -127,42 +127,17 @@ class OpenCodeCredentialReadError extends Schema.TaggedError<OpenCodeCredentialR
   }
 }
 
-const readStoredApiKey = (databasePath: string, integrationId: "opencode" | "opencode-go") =>
-  Effect.try({
-    try: () => {
-      const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
-      try {
-        database.exec("PRAGMA busy_timeout = 100");
-        const row = database
-          .prepare(
-            `SELECT value FROM credential
-             WHERE integration_id = ? AND active IS NOT 0
-             ORDER BY active DESC, time_created DESC, id DESC LIMIT 1`,
-          )
-          .get(integrationId);
-        const stored =
-          typeof row?.value === "string"
-            ? Option.getOrUndefined(decodeStoredKey(row.value))
-            : undefined;
-        const server = stored?.metadata?.server;
-        if (typeof server === "string") {
-          const url = new URL(server);
-          if (`${url.origin}${url.pathname.replace(/\/+$/, "")}` !== "https://opencode.ai/console")
-            return undefined;
-        }
-        return stored?.key.trim();
-      } finally {
-        database.close();
-      }
-    },
-    catch: (cause) => new OpenCodeCredentialReadError({ databasePath, cause }),
-  }).pipe(Effect.orElseSucceed(() => undefined));
+interface StoredCredential {
+  readonly key: string;
+  /** The OpenCode deployment the credential belongs to, when the store names one. */
+  readonly server: string | undefined;
+}
 
 /**
- * Every integration the local OpenCode store holds a key for, so a quota can be
- * read from the provider that actually serves the model.
+ * Every active credential in the local OpenCode store, newest first per
+ * integration. One read, so every caller sees the same store.
  */
-const readStoredIntegrationKeys = (databasePath: string) =>
+const readStoredCredentials = (databasePath: string) =>
   Effect.try({
     try: () => {
       const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
@@ -174,24 +149,60 @@ const readStoredIntegrationKeys = (databasePath: string) =>
              WHERE active IS NOT 0 ORDER BY active DESC, time_created DESC, id DESC`,
           )
           .all() as Array<{ readonly integration_id: unknown; readonly value: unknown }>;
-        const keys = new Map<string, string>();
+        const credentials = new Map<string, StoredCredential>();
         for (const row of rows) {
           const integrationId = typeof row.integration_id === "string" ? row.integration_id : "";
-          if (integrationId === "" || keys.has(integrationId)) continue;
+          if (integrationId === "" || credentials.has(integrationId)) continue;
           const stored =
             typeof row.value === "string"
               ? Option.getOrUndefined(decodeStoredKey(row.value))
               : undefined;
           const key = stored?.key.trim();
-          if (key) keys.set(integrationId, key);
+          if (!key) continue;
+          const server = stored?.metadata?.server;
+          credentials.set(integrationId, {
+            key,
+            server: typeof server === "string" ? server : undefined,
+          });
         }
-        return keys;
+        return credentials;
       } finally {
         database.close();
       }
     },
     catch: (cause) => new OpenCodeCredentialReadError({ databasePath, cause }),
-  }).pipe(Effect.orElseSucceed(() => new Map<string, string>()));
+  }).pipe(Effect.orElseSucceed(() => new Map<string, StoredCredential>()));
+
+/** A Zen key belongs to the deployment that stored it, so only the Console's own is used. */
+function isOfficialConsole(server: string | undefined): boolean {
+  if (server === undefined) return true;
+  try {
+    const url = new URL(server);
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}` === "https://opencode.ai/console";
+  } catch {
+    return false;
+  }
+}
+
+/** The local OpenCode store: where its data home, auth file and credential database live. */
+const openCodeStorePaths = Effect.fn("OpenCodeStore.paths")(function* (
+  environment: NodeJS.ProcessEnv,
+) {
+  const path = yield* Path.Path;
+  const dataHome =
+    environment.XDG_DATA_HOME ||
+    path.join(
+      environment.HOME || environment.USERPROFILE || (yield* HostProcess.HomeDirectory),
+      ".local",
+      "share",
+    );
+  const databaseFile = environment.OPENCODE_DB ?? "opencode.db";
+  return {
+    dataHome,
+    authPath: path.join(dataHome, "opencode", "auth.json"),
+    databasePath: path.resolve(dataHome, "opencode", databaseFile),
+  };
+});
 
 const miniMaxWindow = (
   integrationId: string,
@@ -231,35 +242,28 @@ const miniMaxWindow = (
   };
 };
 
+export interface OpenCodeUsageLimitsInput {
+  readonly enabled: boolean;
+  readonly serverUrl: string;
+  readonly environment: NodeJS.ProcessEnv;
+}
+
 /**
  * Quota for the upstream integrations the user actually runs. OpenCode Go is
  * the Console budget; a custom provider meters its own plan, so its windows
  * come from that provider's API.
  */
 export const readOpenCodeIntegrationUsageLimits = Effect.fn("readOpenCodeIntegrationUsageLimits")(
-  function* (input: {
-    readonly enabled: boolean;
-    readonly serverUrl: string;
-    readonly environment: NodeJS.ProcessEnv;
-  }) {
+  function* (input: OpenCodeUsageLimitsInput) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     if (!input.enabled || input.serverUrl.trim()) {
       return { checkedAt, windows: [] as readonly ServerProviderUsageWindow[] };
     }
 
     return yield* Effect.gen(function* () {
-      const path = yield* Path.Path;
       const env = input.environment;
-      const dataHome =
-        env.XDG_DATA_HOME ||
-        path.join(
-          env.HOME || env.USERPROFILE || (yield* HostProcess.HomeDirectory),
-          ".local",
-          "share",
-        );
-      const databaseFile = env.OPENCODE_DB ?? "opencode.db";
-      const databasePath = path.resolve(dataHome, "opencode", databaseFile);
-      const storedKeys = yield* readStoredIntegrationKeys(databasePath);
+      const { databasePath } = yield* openCodeStorePaths(env);
+      const storedKeys = yield* readStoredCredentials(databasePath);
       const candidates = Object.entries(INTEGRATION_QUOTA_ENDPOINTS).filter(([integrationId]) =>
         storedKeys.has(integrationId),
       );
@@ -269,10 +273,14 @@ export const readOpenCodeIntegrationUsageLimits = Effect.fn("readOpenCodeIntegra
       const client = yield* HttpClient.HttpClient;
       const windows: ServerProviderUsageWindow[] = [];
       for (const [integrationId, quota] of candidates) {
-        const key = storedKeys.get(integrationId);
-        if (key === undefined) continue;
+        const credential = storedKeys.get(integrationId);
+        if (credential === undefined) continue;
         const response = yield* client
-          .execute(HttpClientRequest.get(quota.endpoint).pipe(HttpClientRequest.bearerToken(key)))
+          .execute(
+            HttpClientRequest.get(quota.endpoint).pipe(
+              HttpClientRequest.bearerToken(credential.key),
+            ),
+          )
           .pipe(Effect.timeout("5 seconds"), Effect.option);
         if (Option.isNone(response)) continue;
         const result = response.value;
@@ -345,28 +353,33 @@ export function mergeUsageLimits(
   };
 }
 
+/**
+ * The provider's limits: the Console budget next to the quotas of the
+ * integrations in use. One probe, so every caller reads the same quotas and
+ * the recovery that retries a failed read retries all of them.
+ */
+export const readOpenCodeUsageLimits = Effect.fn("readOpenCodeUsageLimits")(function* (
+  input: OpenCodeUsageLimitsInput,
+) {
+  const [console, integrations] = yield* Effect.all(
+    [readOpenCodeGoUsageLimits(input), readOpenCodeIntegrationUsageLimits(input)],
+    { concurrency: "unbounded" },
+  );
+  return mergeUsageLimits(console, integrations.windows);
+});
+
 /** External OpenCode servers own their credentials; never read the host's account for them. */
-export const readOpenCodeGoUsageLimits = Effect.fn("readOpenCodeGoUsageLimits")(function* (input: {
-  readonly enabled: boolean;
-  readonly serverUrl: string;
-  readonly environment: NodeJS.ProcessEnv;
-}) {
+export const readOpenCodeGoUsageLimits = Effect.fn("readOpenCodeGoUsageLimits")(function* (
+  input: OpenCodeUsageLimitsInput,
+) {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const unsupported = makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
   if (!input.enabled || input.serverUrl.trim()) return unsupported;
 
   return yield* Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
     const env = input.environment;
-    const dataHome =
-      env.XDG_DATA_HOME ||
-      path.join(
-        env.HOME || env.USERPROFILE || (yield* HostProcess.HomeDirectory),
-        ".local",
-        "share",
-      );
-    const authPath = path.join(dataHome, "opencode", "auth.json");
+    const { authPath, databasePath } = yield* openCodeStorePaths(env);
     const contents =
       env.OPENCODE_AUTH_CONTENT ||
       (yield* fs.readFileString(authPath).pipe(
@@ -381,17 +394,18 @@ export const readOpenCodeGoUsageLimits = Effect.fn("readOpenCodeGoUsageLimits")(
     const goKey = (Option.isSome(apiAuth) ? apiAuth.value.key : env.OPENCODE_API_KEY)?.trim();
     // Console supplies Go credentials in OpenCode 2. Inline auth explicitly
     // overrides local credentials, including the Console connection.
-    const databaseFile = env.OPENCODE_DB ?? "opencode.db";
-    const databasePath = path.resolve(dataHome, "opencode", databaseFile);
     const storedKeys =
-      env.OPENCODE_AUTH_CONTENT || databaseFile === ":memory:"
-        ? []
-        : [
-            yield* readStoredApiKey(databasePath, "opencode"),
-            // OpenCode 2 imports auth.json once, so a replaced Go key only exists here.
-            yield* readStoredApiKey(databasePath, "opencode-go"),
-          ];
-    const keys = [...new Set([...storedKeys, goKey].filter((key): key is string => Boolean(key)))];
+      env.OPENCODE_AUTH_CONTENT || env.OPENCODE_DB === ":memory:"
+        ? new Map<string, StoredCredential>()
+        : yield* readStoredCredentials(databasePath);
+    const consoleKey = ["opencode", "opencode-go"]
+      .map((integrationId) => storedKeys.get(integrationId))
+      .filter(
+        (credential): credential is StoredCredential =>
+          credential !== undefined && isOfficialConsole(credential.server),
+      )
+      .map((credential) => credential.key);
+    const keys = [...new Set([...consoleKey, goKey].filter((key): key is string => Boolean(key)))];
     let apiKey = keys[0];
     if (!apiKey) return unsupported;
 

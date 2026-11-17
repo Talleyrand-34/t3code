@@ -27,6 +27,7 @@ import {
   type DailyTotals,
   type HourlyTotals,
   type MergedUsage,
+  usageModelKey,
 } from "@t3tools/shared/usageMerge";
 
 import { cn } from "../../lib/utils";
@@ -159,11 +160,7 @@ function UsageModelDialogHost({
   const model =
     selectedKey === null
       ? undefined
-      : models.find(
-          (candidate) =>
-            `${candidate.provider}:${candidate.upstreamProvider ?? ""}:${candidate.model}` ===
-            selectedKey,
-        );
+      : models.find((candidate) => usageModelKey(candidate) === selectedKey);
   if (model === undefined) return null;
   return (
     <UsageModelDialog
@@ -891,7 +888,7 @@ function UsageOverview({
                 </tr>
               ) : (
                 breakdownModels.map((model, index) => {
-                  const key = `${model.provider}:${model.upstreamProvider ?? ""}:${model.model}`;
+                  const key = usageModelKey(model);
                   const value = metric === "tokens" ? model.totalTokens : model.costUsd;
                   const hasBar = value > 0 && breakdownPeak > 0;
                   const share = modelShare(model, metric === "tokens" ? "tokens" : "cost");
