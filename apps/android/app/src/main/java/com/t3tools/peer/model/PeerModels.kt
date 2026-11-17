@@ -17,7 +17,12 @@ data class ThreadSummary(
   val worktreePath: String = "",
   /** When the last run of this thread finished, so a finished run can be pointed out. */
   val latestRunCompletedAt: String = "",
+  /** When the thread's run settled. A settled thread is finished, an idle one is not. */
+  val settledAt: String = "",
 )
+
+/** A project the server knows, by name. */
+data class ProjectChoice(val id: String, val title: String)
 
 enum class ChatRole { USER, ASSISTANT, SYSTEM }
 
@@ -28,6 +33,29 @@ data class ChatLine(
   val streaming: Boolean,
   /** The server has the message, but no run has started it yet. */
   val pending: Boolean = false,
+  /** The question the agent asked, when this line is one. */
+  val question: AgentQuestion? = null,
+  /** The photos the message carries. */
+  val attachments: List<StoredAttachment> = emptyList(),
+)
+
+/** An option the agent offered with its question. */
+data class AgentQuestionOption(
+  val label: String,
+  val description: String = "",
+  val value: String = "",
+)
+
+/** A question the agent asked, and the request that carries the answer. */
+data class AgentQuestion(
+  /** The request the answer goes back on. */
+  val requestId: String,
+  val id: String,
+  val header: String = "",
+  val question: String,
+  val options: List<AgentQuestionOption> = emptyList(),
+  val allowCustomAnswer: Boolean = true,
+  val required: Boolean = false,
 )
 
 /** A run the server took but has not started. */
@@ -44,6 +72,8 @@ data class PendingMessage(
   val id: String,
   val text: String,
   val createdAt: String,
+  /** The photos the message carries. */
+  val attachments: List<StoredAttachment> = emptyList(),
 )
 
 /** Another agent working inside this thread. */
@@ -86,6 +116,7 @@ object PeerParsing {
       worktreePath = if (shell.isNull("worktreePath")) "" else shell.optString("worktreePath"),
       latestRunCompletedAt =
         if (shell.isNull("latestRunCompletedAt")) "" else shell.optString("latestRunCompletedAt"),
+      settledAt = if (shell.isNull("settledAt")) "" else shell.optString("settledAt"),
     )
   }
 
@@ -112,7 +143,13 @@ object PeerParsing {
     val streaming = item.optBoolean("streaming")
     return when (type) {
       "user_message" ->
-        ChatLine(id, ChatRole.USER, item.optString("text"), streaming)
+        ChatLine(
+          id,
+          ChatRole.USER,
+          item.optString("text"),
+          streaming,
+          attachments = attachments(item),
+        )
 
       "assistant_message" ->
         ChatLine(id, ChatRole.ASSISTANT, item.optString("text"), streaming)
@@ -127,7 +164,13 @@ object PeerParsing {
         ChatLine(id, ChatRole.ASSISTANT, item.optString("markdown"), streaming)
 
       "user_input_request" ->
-        ChatLine(id, ChatRole.SYSTEM, "The agent asked a question.", false)
+        ChatLine(
+          id,
+          ChatRole.SYSTEM,
+          "The agent asked a question.",
+          false,
+          question = question(item),
+        )
 
       "approval_request" ->
         ChatLine(id, ChatRole.SYSTEM, "The agent asked for approval.", false)
@@ -152,6 +195,59 @@ object PeerParsing {
 
       else -> null
     }
+  }
+
+  /** The photos a message carries. */
+  fun attachments(item: JSONObject): List<StoredAttachment> {
+    val array = item.optJSONArray("attachments") ?: return emptyList()
+    val parsed = mutableListOf<StoredAttachment>()
+    for (index in 0 until array.length()) {
+      val attachment = array.optJSONObject(index) ?: continue
+      val id = attachment.optString("id")
+      if (id.isEmpty()) continue
+      parsed +=
+        StoredAttachment(
+          id = id,
+          name = attachment.optString("name"),
+          mimeType = attachment.optString("mimeType"),
+          sizeBytes = attachment.optInt("sizeBytes"),
+        )
+    }
+    return parsed
+  }
+
+  /** The question the agent asked, when the item carries one. */
+  fun question(item: JSONObject): AgentQuestion? {
+    val requestId = item.optString("requestId")
+    if (requestId.isEmpty()) return null
+    val questions = item.optJSONArray("questions") ?: return null
+    val first = questions.optJSONObject(0) ?: return null
+    val text = first.optString("question")
+    if (text.isEmpty()) return null
+    val options = mutableListOf<AgentQuestionOption>()
+    val raw = first.optJSONArray("options")
+    if (raw != null) {
+      for (index in 0 until raw.length()) {
+        val option = raw.optJSONObject(index) ?: continue
+        val label = option.optString("label")
+        if (label.isEmpty()) continue
+        options +=
+          AgentQuestionOption(
+            label = label,
+            description = option.optString("description"),
+            value = option.optString("value").ifEmpty { label },
+          )
+      }
+    }
+    return AgentQuestion(
+      requestId = requestId,
+      id = first.optString("id"),
+      header = first.optString("header"),
+      question = text,
+      options = options,
+      allowCustomAnswer = first.optBoolean("allowCustomAnswer", true),
+      required = first.optBoolean("required", false),
+    )
   }
 
   /** The runs of a thread projection, newest last. */
@@ -196,7 +292,12 @@ object PeerParsing {
     if (message.has("notification") || message.has("delegatedCompletion")) return null
     val text = guestText(message) ?: message.optString("text")
     if (text.isEmpty()) return null
-    return PendingMessage(id = id, text = text, createdAt = message.optString("createdAt"))
+    return PendingMessage(
+      id = id,
+      text = text,
+      createdAt = message.optString("createdAt"),
+      attachments = attachments(message),
+    )
   }
 
   /** The words a guest wrote, when the message came in through a shared link. */
@@ -224,6 +325,7 @@ object PeerParsing {
           text = message.text,
           streaming = false,
           pending = true,
+          attachments = message.attachments,
         )
       }
   }

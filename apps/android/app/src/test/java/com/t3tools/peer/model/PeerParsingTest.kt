@@ -235,6 +235,45 @@ class PeerParsingTest {
     assertEquals(4, PeerParsing.run(run)?.ordinal)
   }
 
+  @Test
+  fun `a message keeps the photos it carries`() {
+    val item =
+      JSONObject()
+        .put("id", "message-1")
+        .put("type", "user_message")
+        .put("text", "Look at this")
+        .put(
+          "attachments",
+          JSONArray()
+            .put(
+              JSONObject()
+                .put("type", "image")
+                .put("id", "attachment-1")
+                .put("name", "photo.jpg")
+                .put("mimeType", "image/jpeg")
+                .put("sizeBytes", 2048),
+            ),
+        )
+
+    val line = PeerParsing.line(item)
+
+    assertEquals(1, line?.attachments?.size)
+    assertEquals("attachment-1", line?.attachments?.single()?.id)
+    assertEquals("photo.jpg", line?.attachments?.single()?.name)
+    assertEquals(2048, line?.attachments?.single()?.sizeBytes)
+  }
+
+  @Test
+  fun `a message without photos carries none`() {
+    val item =
+      JSONObject()
+        .put("id", "message-1")
+        .put("type", "user_message")
+        .put("text", "Just words")
+
+    assertTrue(PeerParsing.line(item)?.attachments?.isEmpty() ?: false)
+  }
+
   private fun run(
     id: String,
     status: String,

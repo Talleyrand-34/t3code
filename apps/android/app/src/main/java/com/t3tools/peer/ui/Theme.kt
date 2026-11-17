@@ -36,6 +36,8 @@ data class PeerPalette(
   val danger: Color,
   val composer: Color,
   val composerBorder: Color,
+  /** The colours a project can wear, in the order the desktop app gives them. */
+  val projectColors: List<Color>,
 )
 
 private val LightPalette =
@@ -54,6 +56,26 @@ private val LightPalette =
     danger = Color(0xFFC10007),
     composer = Color(0xFFFCFCFC),
     composerBorder = Color(0xFFE4E4E7),
+    projectColors = listOf(
+      Color(0xFF4b5563),
+      Color(0xFFdc2626),
+      Color(0xFFea580c),
+      Color(0xFFd97706),
+      Color(0xFFca8a04),
+      Color(0xFF65a30d),
+      Color(0xFF16a34a),
+      Color(0xFF059669),
+      Color(0xFF0d9488),
+      Color(0xFF0891b2),
+      Color(0xFF0284c7),
+      Color(0xFF2563eb),
+      Color(0xFF4f46e5),
+      Color(0xFF7c3aed),
+      Color(0xFF9333ea),
+      Color(0xFFc026d3),
+      Color(0xFFdb2777),
+      Color(0xFFe11d48),
+    ),
   )
 
 private val DarkPalette =
@@ -72,6 +94,26 @@ private val DarkPalette =
     danger = Color(0xFFFF6467),
     composer = Color(0xFF111111),
     composerBorder = Color(0xFF191919),
+    projectColors = listOf(
+      Color(0xFF9ca3af),
+      Color(0xFFf87171),
+      Color(0xFFfb923c),
+      Color(0xFFfbbf24),
+      Color(0xFFfacc15),
+      Color(0xFFa3e635),
+      Color(0xFF4ade80),
+      Color(0xFF34d399),
+      Color(0xFF2dd4bf),
+      Color(0xFF22d3ee),
+      Color(0xFF38bdf8),
+      Color(0xFF60a5fa),
+      Color(0xFF818cf8),
+      Color(0xFFa78bfa),
+      Color(0xFFc084fc),
+      Color(0xFFe879f9),
+      Color(0xFFf472b6),
+      Color(0xFFfb7185),
+    ),
   )
 
 /** The palette for an appearance that has already been resolved. */

@@ -7,15 +7,26 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.t3tools.peer.data.PeerStore
+import com.t3tools.peer.model.AgentQuestion
+import com.t3tools.peer.model.AgentQuestionOption
 import com.t3tools.peer.model.BranchRef
 import com.t3tools.peer.model.ChatLine
 import com.t3tools.peer.model.ChatRole
 import com.t3tools.peer.model.PeerAppearance
 import com.t3tools.peer.model.PeerParsing
+import com.t3tools.peer.model.PeerSearch
 import com.t3tools.peer.model.PendingMessage
+import com.t3tools.peer.model.PhotoAttachment
+import com.t3tools.peer.model.Photos
+import com.t3tools.peer.model.ProjectChoice
 import com.t3tools.peer.model.QueuedRun
+import com.t3tools.peer.model.StoredAttachment
 import com.t3tools.peer.model.SubagentSummary
+import com.t3tools.peer.model.ThreadListRow
+import com.t3tools.peer.model.ThreadMessageMatch
+import com.t3tools.peer.model.ThreadState
 import com.t3tools.peer.model.ThreadSummary
+import com.t3tools.peer.model.orderThreads
 import com.t3tools.peer.net.PeerEndpoint
 import com.t3tools.peer.net.PeerEndpoints
 import com.t3tools.peer.net.PeerSession
@@ -25,6 +36,9 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 enum class PeerScreen { CONNECT, THREADS, THREAD }
+
+/** How long the app waits for the user to stop typing before it asks the server. */
+private const val SEARCH_DEBOUNCE_MS = 250L
 
 class PeerViewModel(application: Application) : AndroidViewModel(application) {
   private val store = PeerStore(application)
@@ -56,6 +70,18 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   var composer by mutableStateOf("")
   var appearance by mutableStateOf(store.appearance)
   var settingsVisible by mutableStateOf(false)
+  /** The photo the user picked, waiting to go with the next message. */
+  var pendingPhoto by mutableStateOf<PhotoAttachment?>(null)
+    private set
+  /** What the user has written for the question the agent asked. */
+  var questionDraft by mutableStateOf("")
+    private set
+  /** What the user is searching for. */
+  var searchQuery by mutableStateOf("")
+    private set
+  /** The project the list is narrowed to, or null for every project. */
+  var selectedProjectId by mutableStateOf<String?>(null)
+    private set
 
   private var session: PeerSession? = null
   private var threadStream: Int? = null
@@ -69,11 +95,104 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   private val subagentStore = LinkedHashMap<String, SubagentSummary>()
   private var projectTitles = emptyMap<String, String>()
   private var projectRoots = emptyMap<String, String>()
+  /** The messages the server found for the search. */
+  private var messageMatches by mutableStateOf(emptyList<ThreadMessageMatch>())
+  /** The requests the app has answered, so a question is not asked twice. */
+  private val answeredRequests = mutableSetOf<String>()
+  private var searchJob: Job? = null
 
   init {
     // A saved session lets the app come back on its own.
     if (store.serverInput.isNotBlank() && !store.bearerToken.isNullOrBlank()) {
       connect()
+    }
+  }
+
+  /** The projects the list can be narrowed to, by name. */
+  val projects: List<ProjectChoice>
+    get() =
+      threads
+        .map { ProjectChoice(it.projectId, it.projectTitle) }
+        .distinctBy { it.id }
+        .sortedBy { it.title.lowercase() }
+
+  /**
+   * The threads the list shows. A search puts the threads whose own text matches
+   * first, and the ones a message matched after them.
+   */
+  val threadRows: List<ThreadListRow>
+    get() {
+      val scoped = threads.filter { selectedProjectId == null || it.projectId == selectedProjectId }
+      return PeerSearch.rows(scoped, PeerSearch.fold(searchQuery), messageMatches)
+    }
+
+  /**
+   * The question the agent is waiting on, when it has not been answered yet.
+   */
+  val pendingQuestion: AgentQuestion?
+    get() {
+      val asked = lines.lastOrNull { it.question != null }?.question ?: return null
+      return if (asked.requestId in answeredRequests) null else asked
+    }
+
+  /** The requests the app has answered, so a question is not asked twice. */
+  val answeredRequestIds: Set<String>
+    get() = answeredRequests
+
+  /** What the user has written for the question. */
+  fun updateQuestionDraft(value: String) {
+    questionDraft = value
+  }
+
+  /** Fills the answer box with one of the options the agent offered. */
+  fun chooseOption(question: AgentQuestion, option: AgentQuestionOption) {
+    questionDraft = option.value
+  }
+
+  /** Sends the answer the agent is waiting for. */
+  fun answerQuestion() {
+    val thread = openThread ?: return
+    val question = pendingQuestion ?: return
+    val answer = questionDraft.trim()
+    if (answer.isEmpty()) return
+    questionDraft = ""
+    answeredRequests += question.requestId
+    viewModelScope.launch {
+      try {
+        session?.respondToRequest(thread.id, question.requestId, mapOf(question.id to answer))
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not answer the agent."
+      }
+    }
+  }
+
+  /** Narrows the list to one project, or back to every project. */
+  fun selectProject(projectId: String?) {
+    selectedProjectId = projectId
+  }
+
+  /**
+   * Sets what the user is searching for. The thread's own text is matched here,
+   * over the threads the app already lists; the server is asked for the messages
+   * that match, because the server owns them.
+   */
+  fun updateSearchQuery(value: String) {
+    searchQuery = value
+    searchJob?.cancel()
+    if (!PeerSearch.isSearchable(value)) {
+      messageMatches = emptyList()
+      return
+    }
+    val query = value.trim()
+    searchJob = viewModelScope.launch {
+      delay(SEARCH_DEBOUNCE_MS)
+      val session = session ?: return@launch
+      try {
+        val matches = session.searchMessages(query)
+        if (searchQuery.trim() == query) messageMatches = matches
+      } catch (_: Exception) {
+        // A search that fails leaves the titles, which the app already knows.
+      }
     }
   }
 
@@ -215,6 +334,8 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun openThread(thread: ThreadSummary) {
+    answeredRequests.clear()
+    questionDraft = ""
     openThread = thread
     lineStore.clear()
     lines = emptyList()
@@ -245,15 +366,61 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   fun send() {
     val text = composer.trim()
     val thread = openThread ?: return
-    if (text.isEmpty()) return
+    val photo = pendingPhoto
+    if (text.isEmpty() && photo == null) return
     composer = ""
+    pendingPhoto = null
     viewModelScope.launch {
       try {
-        session?.sendMessage(thread.id, text)
+        val session = session
+        if (session == null) {
+          error = "The connection to the server is gone."
+          return@launch
+        }
+        // The photo is stored first, so the message carries the attachment the server
+        // gave back rather than the photo itself.
+        val messageId = java.util.UUID.randomUUID().toString()
+        val stored =
+          if (photo == null) {
+            emptyList()
+          } else {
+            val attachment = session.persistAttachment(thread.id, messageId, photo)
+            if (attachment == null) {
+              error = "The photo could not be stored."
+              return@launch
+            }
+            listOf(attachment)
+          }
+        session.sendMessage(thread.id, text, stored, messageId)
       } catch (failure: Exception) {
         error = failure.message ?: "Could not send the message."
       }
     }
+  }
+
+  /** Picks a photo to send with the next message. */
+  fun attachPhoto(uri: android.net.Uri) {
+    val context = getApplication<Application>()
+    val photo = Photos.prepare(uri, context.contentResolver)
+    if (photo == null) {
+      error = "That photo could not be read."
+      return
+    }
+    pendingPhoto = photo
+  }
+
+  /** Drops the photo the user picked. */
+  fun clearPendingPhoto() {
+    pendingPhoto = null
+  }
+
+  /**
+   * The address a stored photo is served from. The link is short-lived, so it is minted
+   * when the photo is about to be shown.
+   */
+  suspend fun attachmentUrl(attachment: StoredAttachment): String? {
+    val session = session ?: return null
+    return runCatching { session.attachmentUrl(attachment) }.getOrNull()
   }
 
   private suspend fun openSession(endpoint: PeerEndpoint) {
@@ -331,7 +498,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         val collected = mutableListOf<ThreadSummary>()
         readThreads(snapshot.optJSONArray("threads"), collected)
         readThreads(snapshot.optJSONArray("archivedThreads"), collected)
-        threads = listed(collected).sortedByDescending { it.updatedAt }
+        threads = orderThreads(listed(collected))
       }
 
       "thread.updated" -> {
@@ -342,8 +509,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
           threads = threads.filterNot { it.id == summary.id }
           return
         }
-        threads = (threads.filterNot { it.id == summary.id } + summary)
-          .sortedByDescending { it.updatedAt }
+        threads = orderThreads(threads.filterNot { it.id == summary.id } + summary)
       }
 
       "thread.removed" -> {
@@ -466,6 +632,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
 
   override fun onCleared() {
     super.onCleared()
+    searchJob?.cancel()
     // The app is gone, so the socket has nothing to talk to.
     session?.close()
     session = null

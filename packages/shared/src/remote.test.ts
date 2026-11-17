@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildPairingAppLink,
+  buildPeerAppLink,
   readPairingAppLink,
   RemoteBackendUrlMissingError,
   RemotePairingTokenMissingError,
@@ -158,5 +159,13 @@ describe("remote", () => {
     expect(
       readPairingAppLink(`https://pair?pairingUrl=${encodeURIComponent(pairingUrl)}`),
     ).toBeNull();
+  });
+
+  it("gives the peer client its own scheme so two apps never claim one link", () => {
+    const pairingUrl = "https://vps.example.com/pair#token=ABC123";
+    const peerLink = buildPeerAppLink(pairingUrl);
+    expect(peerLink.startsWith("t3peer://pair?")).toBe(true);
+    expect(readPairingAppLink(peerLink)).toBe(pairingUrl);
+    expect(buildPairingAppLink(pairingUrl)).not.toBe(peerLink);
   });
 });

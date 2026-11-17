@@ -14,6 +14,9 @@ object PeerProtocol {
   const val METHOD_SUBSCRIBE_SHELL = "orchestration.subscribeShell"
   const val METHOD_SUBSCRIBE_THREAD = "orchestration.subscribeThread"
   const val METHOD_DISPATCH_COMMAND = "orchestration.dispatchCommand"
+  const val METHOD_SEARCH_THREADS = "orchestration.searchThreads"
+  const val METHOD_PERSIST_ATTACHMENTS = "assets.persistChatAttachments"
+  const val METHOD_CREATE_ASSET_URL = "assets.createUrl"
   const val METHOD_VCS_LIST_REFS = "vcs.listRefs"
   const val METHOD_VCS_SWITCH_REF = "vcs.switchRef"
 

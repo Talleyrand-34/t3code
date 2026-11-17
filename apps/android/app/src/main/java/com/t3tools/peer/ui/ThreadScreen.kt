@@ -1,6 +1,9 @@
 package com.t3tools.peer.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +34,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.t3tools.peer.model.AgentQuestion
 import com.t3tools.peer.model.ChatLine
 import com.t3tools.peer.model.ChatRole
 import kotlinx.coroutines.flow.first
@@ -58,6 +63,12 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
   val listState = rememberLazyListState()
   val lines = viewModel.lines
   val imeVisible = WindowInsets.isImeVisible
+
+  // The system photo picker hands back a photo the app may read.
+  val photoPicker =
+    rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+      uri?.let { viewModel.attachPhoto(it) }
+    }
 
   // The system back button leaves the thread for the list, like the arrow does.
   BackHandler { viewModel.backToThreads() }
@@ -88,17 +99,108 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
       ) {
-        items(lines, key = { it.id }) { line -> LineRow(line) }
+        items(lines, key = { it.id }) { line ->
+          LineRow(line)
+          line.attachments.forEach { attachment ->
+            AttachmentImage(attachment = attachment, viewModel = viewModel)
+          }
+          line.question?.let { question ->
+            QuestionCard(
+              question = question,
+              answered = question.requestId in viewModel.answeredRequestIds,
+              onChoose = { option -> viewModel.chooseOption(question, option) },
+            )
+          }
+        }
       }
-      Composer(
-        value = viewModel.composer,
-        onValueChange = { viewModel.composer = it },
-        onSend = viewModel::send,
-      )
+      val pendingPhoto = viewModel.pendingPhoto
+      val question = viewModel.pendingQuestion
+      if (question != null) {
+        Composer(
+          value = viewModel.questionDraft,
+          onValueChange = { viewModel.updateQuestionDraft(it) },
+          onSend = viewModel::answerQuestion,
+          placeholder = "Answer the agent",
+          sendEnabled = viewModel.questionDraft.isNotBlank(),
+        )
+      } else {
+        Composer(
+          value = viewModel.composer,
+          onValueChange = { viewModel.composer = it },
+          onSend = viewModel::send,
+          onPickPhoto = { photoPicker.launch(PickVisualMediaRequest()) },
+          pendingPhotoName = pendingPhoto?.name,
+          onClearPhoto = viewModel::clearPendingPhoto,
+        )
+      }
     }
   }
   if (viewModel.branchSheetVisible) {
     BranchSheet(viewModel)
+  }
+}
+
+/**
+ * The question the agent asked, with the options it offered. The answer goes back
+ * on the request the question belongs to.
+ */
+@Composable
+private fun QuestionCard(
+  question: AgentQuestion,
+  answered: Boolean,
+  onChoose: (com.t3tools.peer.model.AgentQuestionOption) -> Unit,
+) {
+  val palette = LocalPeerPalette.current
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(12.dp))
+        .background(palette.card)
+        .padding(14.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    if (question.header.isNotEmpty()) {
+      Text(
+        question.header,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = palette.primary,
+      )
+    }
+    Text(question.question, fontSize = 15.sp, color = palette.foreground)
+    question.options.forEach { option ->
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(palette.grouped)
+            .clickable(enabled = !answered) { onChoose(option) }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column(modifier = Modifier.weight(1f)) {
+          Text(option.label, fontSize = 14.sp, color = palette.foreground)
+          if (option.description.isNotEmpty()) {
+            Text(
+              option.description,
+              style = MaterialTheme.typography.labelMedium,
+              color = palette.muted,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
+      }
+    }
+    if (answered) {
+      Text(
+        "Answered",
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.muted,
+      )
+    }
   }
 }
 
@@ -205,7 +307,16 @@ private fun LineRow(line: ChatLine) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit) {
+private fun Composer(
+  value: String,
+  onValueChange: (String) -> Unit,
+  onSend: () -> Unit,
+  placeholder: String = "Ask the agent, or run a command",
+  sendEnabled: Boolean = value.isNotBlank(),
+  onPickPhoto: (() -> Unit)? = null,
+  pendingPhotoName: String? = null,
+  onClearPhoto: (() -> Unit)? = null,
+) {
   val palette = LocalPeerPalette.current
   Surface(color = palette.screen) {
     Column(
@@ -216,6 +327,13 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
           .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
           .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
+      if (pendingPhotoName != null && onClearPhoto != null) {
+        PendingPhoto(
+          name = pendingPhotoName,
+          onRemove = onClearPhoto,
+          modifier = Modifier.padding(bottom = 6.dp),
+        )
+      }
       Row(
         modifier = Modifier
           .fillMaxWidth()
@@ -224,13 +342,19 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
           .padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.Bottom,
       ) {
+        if (onPickPhoto != null) {
+          IconButton(onClick = onPickPhoto) {
+            Icon(
+              Icons.Filled.AddAPhoto,
+              contentDescription = "Attach a photo",
+              tint = palette.muted,
+              modifier = Modifier.size(18.dp),
+            )
+          }
+        }
         Box(modifier = Modifier.weight(1f).padding(vertical = 10.dp)) {
           if (value.isEmpty()) {
-            Text(
-              "Ask the agent, or run a command",
-              fontSize = 15.sp,
-              color = palette.muted,
-            )
+            Text(placeholder, fontSize = 15.sp, color = palette.muted)
           }
           BasicTextField(
             value = value,
@@ -245,14 +369,14 @@ private fun Composer(value: String, onValueChange: (String) -> Unit, onSend: () 
           modifier = Modifier
             .size(38.dp)
             .clip(CircleShape)
-            .background(if (value.isBlank()) palette.grouped else palette.primary)
-            .clickable(enabled = value.isNotBlank(), onClick = onSend),
+            .background(if (sendEnabled) palette.primary else palette.grouped)
+            .clickable(enabled = sendEnabled, onClick = onSend),
           contentAlignment = Alignment.Center,
         ) {
           Icon(
             Icons.AutoMirrored.Filled.Send,
             contentDescription = "Send",
-            tint = if (value.isBlank()) palette.muted else palette.onPrimary,
+            tint = if (sendEnabled) palette.onPrimary else palette.muted,
             modifier = Modifier.size(18.dp),
           )
         }

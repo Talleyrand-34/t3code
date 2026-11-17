@@ -1,6 +1,10 @@
 package com.t3tools.peer.net
 
 import com.t3tools.peer.model.BranchRef
+import com.t3tools.peer.model.PhotoAttachment
+import com.t3tools.peer.model.StoredAttachment
+import com.t3tools.peer.model.PeerSearch
+import com.t3tools.peer.model.ThreadMessageMatch
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import okhttp3.OkHttpClient
@@ -39,7 +43,76 @@ class PeerSession private constructor(
     socket.cancel(requestId)
   }
 
-  suspend fun sendMessage(threadId: String, text: String) {
+  /**
+   * The messages that match a query, in the server's order.
+   *
+   * The server owns the messages, so it is the one that finds them. A thread's own
+   * text is matched by the app, over the threads it already lists.
+   */
+  suspend fun searchMessages(query: String, limit: Int = SEARCH_LIMIT): List<ThreadMessageMatch> {
+    val result =
+      socket.call(
+        PeerProtocol.METHOD_SEARCH_THREADS,
+        JSONObject().put("query", query).put("limit", limit),
+      )
+    return PeerSearch.messageMatches(result)
+  }
+
+  /**
+   * Stores a photo with the server and returns the attachment the chat reads it by.
+   */
+  suspend fun persistAttachment(
+    threadId: String,
+    messageId: String,
+    photo: PhotoAttachment,
+  ): StoredAttachment? {
+    val result =
+      socket.call(
+        PeerProtocol.METHOD_PERSIST_ATTACHMENTS,
+        JSONObject()
+          .put("threadId", threadId)
+          .put("messageId", messageId)
+          .put("attachments", org.json.JSONArray().put(photo.toStoredAttachment())),
+      )
+    val attachment = result.optJSONArray("attachments")?.optJSONObject(0) ?: return null
+    val id = attachment.optString("id")
+    if (id.isEmpty()) return null
+    return StoredAttachment(
+      id = id,
+      name = attachment.optString("name"),
+      mimeType = attachment.optString("mimeType"),
+      sizeBytes = attachment.optInt("sizeBytes"),
+    )
+  }
+
+  /**
+   * The address a stored photo is served from. The link is short-lived, so it is minted
+   * when the photo is about to be shown.
+   */
+  suspend fun attachmentUrl(attachment: StoredAttachment): String? {
+    val result =
+      socket.call(
+        PeerProtocol.METHOD_CREATE_ASSET_URL,
+        JSONObject().put(
+          "resource",
+          JSONObject()
+            .put("_tag", "attachment")
+            .put("attachmentId", attachment.id)
+            .put("fileName", attachment.name)
+            .put("mimeType", attachment.mimeType),
+        ),
+      )
+    val relative = result.optString("relativeUrl")
+    if (relative.isEmpty()) return null
+    return endpoint.httpBaseUrl.trimEnd('/') + "/" + relative.trimStart('/')
+  }
+
+  suspend fun sendMessage(
+    threadId: String,
+    text: String,
+    attachments: List<StoredAttachment> = emptyList(),
+    messageId: String = UUID.randomUUID().toString(),
+  ) {
     val command =
       JSONObject()
         .put("type", "message.dispatch")
@@ -47,10 +120,36 @@ class PeerSession private constructor(
         .put("createdBy", "user")
         .put("creationSource", "mobile")
         .put("threadId", threadId)
-        .put("messageId", UUID.randomUUID().toString())
+        .put("messageId", messageId)
         .put("text", text)
-        .put("attachments", org.json.JSONArray())
+        .put("attachments", org.json.JSONArray().apply {
+          attachments.forEach { attachment ->
+            put(
+              org.json.JSONObject()
+                .put("type", "image")
+                .put("id", attachment.id)
+                .put("name", attachment.name)
+                .put("mimeType", attachment.mimeType)
+                .put("sizeBytes", attachment.sizeBytes)
+            )
+          }
+        })
         .put("dispatchMode", JSONObject().put("type", "start_immediately"))
+    socket.call(PeerProtocol.METHOD_DISPATCH_COMMAND, command)
+  }
+
+  /**
+   * Answers a question the agent asked. The answer goes back on the request it
+   * belongs to, so the agent reads it where it asked.
+   */
+  suspend fun respondToRequest(threadId: String, requestId: String, answers: Map<String, String>) {
+    val command =
+      JSONObject()
+        .put("type", "runtime-request.respond")
+        .put("commandId", UUID.randomUUID().toString())
+        .put("threadId", threadId)
+        .put("requestId", requestId)
+        .put("answers", JSONObject(answers))
     socket.call(PeerProtocol.METHOD_DISPATCH_COMMAND, command)
   }
 
@@ -110,6 +209,9 @@ class PeerSession private constructor(
   companion object {
     /** How many branches the picker asks for at once. */
     private const val LIST_REFS_LIMIT = 50
+
+    /** How many message hits a search asks for at once. */
+    private const val SEARCH_LIMIT = 50
 
     /** A socket that stays quiet when idle and notices a dead one. */
     private fun defaultHttpClient(): OkHttpClient =

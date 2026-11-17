@@ -12,7 +12,10 @@ one connection, lists the server's threads, opens one, and sends messages.
 
 - Pair with a server using the one-time code from `t3 pair`, or open a pairing
   link with the app.
-- List the threads on that server, with their project and state.
+- List the threads on that server, with their project and state. The list is grouped the way the desktop app groups it: working threads, then the ones that finished, then the idle ones, and every project wears a colour and a monogram of its own.
+- Narrow the list to one project, and search it: a thread whose own title matches comes first, and the ones a message inside them matched follow.
+- Answer a question the agent asked on the thread, or pick one of the options it offered.
+- Attach a photo to a message. The photo is scaled down, stored by the server, and shown in the thread.
 - Open a thread, read it, and watch it fill while the agent works.
 - See the messages the server took but has not run yet, and the subagents of
   the thread you are in.
@@ -24,7 +27,7 @@ one connection, lists the server's threads, opens one, and sends messages.
 
 ## What it does not do
 
-Attachments, plan editing, pull requests, thread creation, approvals, and the
+Plan editing, pull requests, thread creation, approvals, and the
 settings screens all live in the full app. This one is a reader and a way to
 start a turn.
 

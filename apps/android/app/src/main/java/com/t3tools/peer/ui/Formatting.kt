@@ -6,6 +6,8 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
 import com.t3tools.peer.model.SubagentSummary
+import com.t3tools.peer.model.ThreadState
+import com.t3tools.peer.model.ThreadSummary
 
 /** Short labels for the states a thread can be in, as the official app shows them. */
 fun statusLabel(status: String): String? =
@@ -30,6 +32,19 @@ fun subagentStatusLabel(subagent: SubagentSummary): String =
     "interrupted" -> "Interrupted"
     else -> ""
   }
+
+/**
+ * What a row says about its thread.
+ *
+ * A thread that is working says so, a thread whose run settled says it finished, and
+ * an idle thread says nothing, so a quiet thread does not look like a busy one.
+ */
+fun threadStateLabel(thread: ThreadSummary): String? =
+  statusLabel(thread.status)
+    ?: when (ThreadState.of(thread)) {
+      ThreadState.FINISHED -> "Finished"
+      else -> null
+    }
 
 /**
  * A run that finished a moment ago. The list points it out, so a turn that
