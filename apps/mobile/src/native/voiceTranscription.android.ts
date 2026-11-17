@@ -23,7 +23,8 @@ type GoogleTranscriptionModule = {
 const native = requireOptionalNativeModule<GoogleTranscriptionModule>("T3VoiceTranscription");
 
 const nativeErrorMessages: Readonly<Record<string, string>> = {
-  unavailable: "On-device voice transcription is not available for this device language.",
+  unavailable:
+    "On-device voice transcription is not available in this build. Use an environment or cloud destination.",
   storage: "Not enough storage for on-device dictation. Free device storage and retry.",
   quota: "On-device speech quota reached. Let the device rest or charge it, then retry.",
   "no-speech": "No speech was detected. Speak again and retry dictation.",
@@ -98,7 +99,7 @@ async function runOperation<T>(
       message:
         (typeof code === "string" ? nativeErrorMessages[code] : undefined) ??
         (fallbackCode === "preparation-failed"
-          ? "Voice transcription could not prepare this language. Check Google speech services and try again."
+          ? "Voice transcription could not prepare this language. Choose an environment or cloud destination and try again."
           : "Voice transcription failed."),
       cause: error,
     });
