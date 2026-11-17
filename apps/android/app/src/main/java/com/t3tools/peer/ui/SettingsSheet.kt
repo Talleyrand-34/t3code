@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.t3tools.peer.BuildConfig
 import com.t3tools.peer.model.PeerAppearance
 
 /** Appearance and connection settings, in the shape the official app uses. */
@@ -45,7 +48,12 @@ fun SettingsSheet(viewModel: PeerViewModel) {
     // The sheet is a window of its own, so its bars need telling as well.
     PeerSystemBars(LocalPeerDark.current)
     Column(
-      modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp),
+      modifier =
+        Modifier.fillMaxWidth()
+          // The sheet is no taller than the screen, so what does not fit scrolls.
+          .verticalScroll(rememberScrollState())
+          .navigationBarsPadding()
+          .padding(horizontal = 20.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Text(
@@ -97,6 +105,15 @@ fun SettingsSheet(viewModel: PeerViewModel) {
             viewModel.hideSettings()
             viewModel.forgetServer()
           }.padding(vertical = 6.dp),
+      )
+      Spacer(Modifier.height(12.dp))
+
+      // Which build is running, so an update that did not land is visible.
+      Text(
+        "T3 Peer ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · " +
+          if (BuildConfig.DEBUG) "debug" else "release",
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.muted,
       )
       Spacer(Modifier.height(12.dp))
     }

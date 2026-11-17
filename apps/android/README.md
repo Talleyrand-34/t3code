@@ -89,6 +89,12 @@ only matters for an artifact that leaves the machine. Keep the keystore: a
 later build signed with another key cannot replace an installed one, and
 Android then asks for the app to be removed first, which clears the pairing.
 
+The two variants do not share a key: the debug build carries the machine's
+debug keystore, the release build the one named above. Android refuses to let
+one replace the other (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), so a phone keeps
+one variant or the app is removed before it changes, which clears the pairing.
+The Settings sheet names the build that is running.
+
 The `-r` matters: it replaces the app instead of removing it first, so the
 pairing survives the update. The one thing that does clear the pairing is
 removing the app, which Android also demands when the new APK is signed with a
