@@ -17,7 +17,26 @@ data class ThreadSummary(
   val worktreePath: String = "",
   /** When the last run of this thread finished, so a finished run can be pointed out. */
   val latestRunCompletedAt: String = "",
-)
+) {
+  /** Whether an agent is working on this thread right now. */
+  val isWorking: Boolean
+    get() = status in WORKING_STATUSES
+}
+
+/** The states a thread is in while an agent is on it. */
+val WORKING_STATUSES = setOf("running", "starting", "preparing", "queued", "waiting")
+
+/**
+ * The threads worth having ready before the user opens one: the ones an agent
+ * works on, because those are the ones that change and the ones the user
+ * looks at, and after them the ones touched last.
+ */
+fun selectWarmThreads(threads: List<ThreadSummary>, limit: Int): List<ThreadSummary> {
+  if (limit <= 0) return emptyList()
+  val working = threads.filter { it.isWorking }.sortedByDescending { it.updatedAt }
+  val idle = threads.filterNot { it.isWorking }.sortedByDescending { it.updatedAt }
+  return (working + idle).take(limit)
+}
 
 enum class ChatRole { USER, ASSISTANT, SYSTEM }
 

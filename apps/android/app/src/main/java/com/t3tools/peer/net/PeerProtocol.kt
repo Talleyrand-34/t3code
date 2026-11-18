@@ -29,6 +29,20 @@ object PeerProtocol {
   fun ack(requestId: Int): JSONObject =
     JSONObject().put("_tag", "Ack").put("requestId", requestId)
 
+  /**
+   * What a thread subscription starts with. A thread that has been worked on
+   * for days carries megabytes of history, and a phone cannot carry that over
+   * the air and read it, so the app asks for the bounded window the host keeps
+   * for a fresh client: the last turns, the running work and the messages the
+   * queue holds. The web app asks for the same window.
+   */
+  fun threadSubscription(threadId: String): JSONObject =
+    JSONObject()
+      .put("threadId", threadId)
+      .put("acceptBoundedSnapshot", true)
+      .put("acceptDeferredWork", true)
+      .put("acceptCompactTurnItems", true)
+
   fun pong(): JSONObject = JSONObject().put("_tag", "Pong")
 
   fun ping(): JSONObject = JSONObject().put("_tag", "Ping")

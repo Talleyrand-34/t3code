@@ -31,7 +31,7 @@ class PeerSession private constructor(
   fun subscribeThread(threadId: String, onItem: (JSONObject) -> Unit): Int =
     socket.stream(
       PeerProtocol.METHOD_SUBSCRIBE_THREAD,
-      JSONObject().put("threadId", threadId),
+      PeerProtocol.threadSubscription(threadId),
       onItem,
     )
 

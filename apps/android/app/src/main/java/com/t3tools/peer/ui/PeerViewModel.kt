@@ -21,6 +21,7 @@ import com.t3tools.peer.model.PendingMessage
 import com.t3tools.peer.model.QueuedRun
 import com.t3tools.peer.model.SubagentSummary
 import com.t3tools.peer.model.ThreadSummary
+import com.t3tools.peer.model.selectWarmThreads
 import com.t3tools.peer.net.PeerEndpoint
 import com.t3tools.peer.net.PeerEndpoints
 import com.t3tools.peer.net.PeerSession
@@ -86,16 +87,15 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
 
   private var session: PeerSession? = null
   private var shellStream: Int? = null
-  private var threadStream: Int? = null
+  /** The streams of the threads the app keeps ready, by thread id. */
+  private val threadStreams = LinkedHashMap<String, Int>()
+  /** What the app knows about each thread it keeps ready. */
+  private val threadStates = LinkedHashMap<String, ThreadState>()
   private var draftSaveJob: Job? = null
   private var reconnectJob: Job? = null
   private var reconnectAttempts = 0
   private var connectionGeneration = 0
   private var appliedLink: String? = null
-  private val lineStore = LinkedHashMap<String, ChatLine>()
-  private val runStore = LinkedHashMap<String, QueuedRun>()
-  private val messageStore = LinkedHashMap<String, PendingMessage>()
-  private val subagentStore = LinkedHashMap<String, SubagentSummary>()
   private var projectTitles = emptyMap<String, String>()
   private var projectRoots = emptyMap<String, String>()
 
@@ -123,14 +123,10 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
       closeShellStream()
       threads = emptyList()
       shellStream = session.subscribeShell(::onShellItem)
-      val thread = openThread
-      if (thread != null) {
-        closeThreadStream()
-        lineStore.clear()
-        lines = emptyList()
-        pendingLines = emptyList()
-        threadStream = session.subscribeThread(thread.id, ::onThreadItem)
-      }
+      // Everything the app held came from the host, so it goes and comes again.
+      releaseAllThreads()
+      updateWarmThreads()
+      publishOpenThread()
     } catch (failure: Exception) {
       error = failure.message ?: "Could not resync."
     } finally {
@@ -362,14 +358,14 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     reconnectJob = null
     connectionGeneration += 1
     closeShellStream()
-    closeThreadStream()
+    releaseAllThreads()
     session?.close()
     session = null
     threads = emptyList()
     openThread = null
     lines = emptyList()
     pendingLines = emptyList()
-    lineStore.clear()
+    subagents = emptyList()
     environmentLabel = ""
     screen = PeerScreen.CONNECT
   }
@@ -385,35 +381,69 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
 
   fun openThread(thread: ThreadSummary) {
     openThread = thread
-    lineStore.clear()
-    lines = emptyList()
-    pendingLines = emptyList()
     // The words typed for this thread are still there, even after the app was
     // closed or the thread was left.
     composer = store.draft(thread.id)
     screen = PeerScreen.THREAD
-    closeThreadStream()
-    threadStream = session?.subscribeThread(thread.id, ::onThreadItem)
+    // A thread that is kept ready shows its chat at once, without a wait.
+    publishOpenThread()
+    keepThreadReady(thread.id)
   }
 
   /** Leaves the thread and shows the list again, the way the back button does. */
   fun backToThreads() {
     openThread = null
-    lineStore.clear()
-    runStore.clear()
-    messageStore.clear()
-    subagentStore.clear()
     lines = emptyList()
     pendingLines = emptyList()
     subagents = emptyList()
+    activeRunId = null
+    resumableRunId = null
+    holdsQueuedRuns = false
     screen = PeerScreen.THREADS
-    closeThreadStream()
   }
 
-  /** The old thread must stop streaming, or its items land in the new one. */
-  private fun closeThreadStream() {
-    threadStream?.let { session?.unsubscribe(it) }
-    threadStream = null
+  /**
+   * Keeps a thread ready, so opening it shows its chat at once. The host sends
+   * the same bounded window it sends the web app, which is a fraction of a
+   * thread that has been worked on for days.
+   */
+  private fun keepThreadReady(threadId: String) {
+    val session = session ?: return
+    if (threadStreams.containsKey(threadId)) return
+    threadStreams[threadId] =
+      session.subscribeThread(threadId) { item -> onThreadItem(threadId, item) }
+    threadStates.getOrPut(threadId) { ThreadState() }
+  }
+
+  /** Lets a thread go, so the host stops sending it and the phone forgets it. */
+  private fun releaseThread(threadId: String) {
+    threadStreams.remove(threadId)?.let { session?.unsubscribe(it) }
+    threadStates.remove(threadId)
+  }
+
+  /** Lets every thread go, for when the host is read again from the start. */
+  private fun releaseAllThreads() {
+    for (requestId in threadStreams.values.toList()) {
+      session?.unsubscribe(requestId)
+    }
+    threadStreams.clear()
+    threadStates.clear()
+  }
+
+  /**
+   * Keeps the threads worth opening ready: the ones an agent works on, then
+   * the ones touched last. The phone holds those, so opening one of them shows
+   * its chat at once instead of waiting for the host.
+   */
+  private fun updateWarmThreads() {
+    if (session == null) return
+    val wanted = selectWarmThreads(threads, PRELOAD_LIMIT)
+    for (thread in wanted) keepThreadReady(thread.id)
+    val keep = wanted.mapTo(mutableSetOf()) { it.id }
+    openThread?.id?.let { keep.add(it) }
+    for (threadId in threadStreams.keys.toList()) {
+      if (threadId !in keep) releaseThread(threadId)
+    }
   }
 
   /** The same for the thread list: a second stream would double every update. */
@@ -455,7 +485,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         )
       session?.close()
       session = opened
-      threadStream = null
+      releaseAllThreads()
       shellStream = null
       store.bearerToken = opened.bearerToken
       store.serverInput = serverInput
@@ -520,6 +550,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         readThreads(snapshot.optJSONArray("threads"), collected)
         readThreads(snapshot.optJSONArray("archivedThreads"), collected)
         threads = listed(collected).sortedByDescending { it.updatedAt }
+        updateWarmThreads()
       }
 
       "thread.updated" -> {
@@ -532,29 +563,31 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         }
         threads = (threads.filterNot { it.id == summary.id } + summary)
           .sortedByDescending { it.updatedAt }
+        updateWarmThreads()
       }
 
       "thread.removed" -> {
         val id = item.optString("threadId")
         threads = threads.filterNot { it.id == id }
+        releaseThread(id)
       }
     }
   }
 
-  private fun onThreadItem(item: JSONObject) {
+  private fun onThreadItem(threadId: String, item: JSONObject) {
+    val state = threadStates.getOrPut(threadId) { ThreadState() }
     when (item.optString("kind")) {
       "snapshot" -> {
         val projection = item.optJSONObject("projection") ?: return
-        lineStore.clear()
-        PeerParsing.lines(projection).forEach { lineStore[it.id] = it }
-        runStore.clear()
-        PeerParsing.runs(projection).forEach { runStore[it.id] = it }
-        messageStore.clear()
-        PeerParsing.messages(projection).forEach { messageStore[it.id] = it }
-        subagentStore.clear()
-        PeerParsing.subagents(projection).forEach { subagentStore[it.id] = it }
-        publishLines()
-        publishSubagents()
+        state.lines.clear()
+        PeerParsing.lines(projection).forEach { state.lines[it.id] = it }
+        state.runs.clear()
+        PeerParsing.runs(projection).forEach { state.runs[it.id] = it }
+        state.messages.clear()
+        PeerParsing.messages(projection).forEach { state.messages[it.id] = it }
+        state.subagents.clear()
+        PeerParsing.subagents(projection).forEach { state.subagents[it.id] = it }
+        publishThread(threadId)
       }
 
       "event" -> {
@@ -563,35 +596,35 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
           "turn-item.updated" -> {
             val payload = event.optJSONObject("payload") ?: return
             val line = PeerParsing.line(payload) ?: return
-            lineStore[line.id] = line
-            publishLines()
+            state.lines[line.id] = line
+            publishThread(threadId)
           }
 
           "run.updated" -> {
             val payload = event.optJSONObject("payload") ?: return
             val run = PeerParsing.run(payload) ?: return
-            runStore[run.id] = run
-            publishLines()
+            state.runs[run.id] = run
+            publishThread(threadId)
           }
 
           "message.updated" -> {
             val payload = event.optJSONObject("payload") ?: return
             val message = PeerParsing.message(payload) ?: return
-            messageStore[message.id] = message
-            publishLines()
+            state.messages[message.id] = message
+            publishThread(threadId)
           }
 
           "subagent.updated" -> {
             val payload = event.optJSONObject("payload") ?: return
             val subagent = PeerParsing.subagent(payload) ?: return
-            subagentStore[subagent.id] = subagent
-            publishSubagents()
+            state.subagents[subagent.id] = subagent
+            publishThread(threadId)
           }
 
           "thread.updated" -> {
             val payload = event.optJSONObject("payload") ?: return
             val title = payload.optString("title")
-            if (title.isNotEmpty()) {
+            if (title.isNotEmpty() && openThread?.id == threadId) {
               openThread = openThread?.copy(title = title)
             }
           }
@@ -600,33 +633,37 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
+  /** Shows what changed in a thread, but only when it is the one on screen. */
+  private fun publishThread(threadId: String) {
+    if (openThread?.id != threadId) return
+    publishOpenThread()
+  }
+
   /**
-   * The chat, with the messages no run has started yet kept apart. They stay
-   * apart from the turn items: a queued message turns into a turn item under
-   * its own id, so keeping them together would show it twice.
+   * Shows what the app knows about the open thread. A thread that is kept
+   * ready has its chat already, so it appears at once.
    */
-  private fun publishLines() {
-    lines = lineStore.values.toList()
-    pendingLines = pendingLines()
-    publishRuns()
+  private fun publishOpenThread() {
+    val thread = openThread ?: return
+    val state = threadStates[thread.id]
+    lines = state?.lines?.values?.toList() ?: emptyList()
+    pendingLines =
+      state?.let {
+        PeerParsing.pendingLines(it.runs.values.toList(), it.messages.values.toList())
+      } ?: emptyList()
+    subagents = state?.subagents?.values?.sortedBy { it.startedAt } ?: emptyList()
+    publishRuns(state)
   }
 
   /**
    * What the thread can be asked to do right now: stop the turn it is working
    * on, or go on with the one it interrupted.
    */
-  private fun publishRuns() {
-    val runs = runStore.values.sortedBy { it.ordinal }
+  private fun publishRuns(state: ThreadState?) {
+    val runs = state?.runs?.values?.sortedBy { it.ordinal } ?: emptyList()
     activeRunId = runs.lastOrNull { it.status in LIVE_RUN_STATUSES }?.id
     resumableRunId = runs.lastOrNull { it.status == "interrupted" }?.id
     holdsQueuedRuns = runs.any { it.status == "queued" && it.queueHeld }
-  }
-
-  private fun pendingLines(): List<ChatLine> =
-    PeerParsing.pendingLines(runStore.values.toList(), messageStore.values.toList())
-
-  private fun publishSubagents() {
-    subagents = subagentStore.values.sortedBy { it.startedAt }
   }
 
   /** Subagents and side chats live inside their parent, never in the list. */
@@ -680,6 +717,13 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
      */
     val LIVE_RUN_STATUSES = setOf("running", "waiting", "starting", "preparing")
 
+    /**
+     * How many threads the app keeps ready. The host sends each one a bounded
+     * window, so this is a few hundred kilobytes of history the phone holds to
+     * make opening a thread instant.
+     */
+    const val PRELOAD_LIMIT = 10
+
     /** What the app writes when the user goes on with a turn themselves. */
     const val CONTINUE_TEXT = "Continue where you left off."
 
@@ -692,4 +736,12 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     /** How long the typing has to settle before the draft goes to disk. */
     const val DRAFT_SAVE_DELAY_MS = 400L
   }
+}
+
+/** What the app knows about one thread, so it can be opened without a wait. */
+private class ThreadState {
+  val lines = LinkedHashMap<String, ChatLine>()
+  val runs = LinkedHashMap<String, QueuedRun>()
+  val messages = LinkedHashMap<String, PendingMessage>()
+  val subagents = LinkedHashMap<String, SubagentSummary>()
 }
