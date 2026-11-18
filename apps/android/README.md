@@ -62,7 +62,20 @@ credentials → Install a certificate → CA certificate**.
 
 ## Building
 
-Needs a JDK 17 or newer and an Android SDK with platform 35.
+Needs a JDK 17 or newer and an Android SDK with platform 35. The Makefile
+takes the SDK from `ANDROID_HOME` (`$HOME/Android/Sdk` by default):
+
+```bash
+cd apps/android
+make apk        # the debug build
+make release    # the build that goes on a phone
+make install    # the debug build, on the connected device
+make test       # the unit tests
+```
+
+Every target lands its artifact in the usual place, so
+`app/build/outputs/apk/<variant>/` always holds the latest build. The same
+builds without make:
 
 ```bash
 cd apps/android
