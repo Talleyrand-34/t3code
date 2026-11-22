@@ -7,15 +7,21 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.t3tools.peer.data.PeerStore
+import com.t3tools.peer.model.AgentApproval
 import com.t3tools.peer.model.AgentQuestion
 import com.t3tools.peer.model.AgentQuestionOption
 import com.t3tools.peer.model.BranchRef
 import com.t3tools.peer.model.ChatLine
 import com.t3tools.peer.model.ChatRole
+import com.t3tools.peer.model.ComposerDispatch
+import com.t3tools.peer.model.FollowUp
+import com.t3tools.peer.model.FollowUpBehavior
 import com.t3tools.peer.model.PeerAppearance
+import com.t3tools.peer.model.PeerFile
+import com.t3tools.peer.model.PeerFiles
 import com.t3tools.peer.model.PeerParsing
 import com.t3tools.peer.model.PeerSearch
-import com.t3tools.peer.model.PendingMessage
+import com.t3tools.peer.model.PeerThreadState
 import com.t3tools.peer.model.PhotoAttachment
 import com.t3tools.peer.model.Photos
 import com.t3tools.peer.model.ProjectChoice
@@ -29,7 +35,9 @@ import com.t3tools.peer.model.ThreadSummary
 import com.t3tools.peer.model.orderThreads
 import com.t3tools.peer.net.PeerEndpoint
 import com.t3tools.peer.net.PeerEndpoints
+import com.t3tools.peer.net.PeerException
 import com.t3tools.peer.net.PeerSession
+import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -39,6 +47,9 @@ enum class PeerScreen { CONNECT, THREADS, THREAD }
 
 /** How long the app waits for the user to stop typing before it asks the server. */
 private const val SEARCH_DEBOUNCE_MS = 250L
+
+/** How long a notice stays on the screen before it goes away. */
+private const val NOTICE_MS = 5_000L
 
 class PeerViewModel(application: Application) : AndroidViewModel(application) {
   private val store = PeerStore(application)
@@ -68,10 +79,14 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   var branchSheetVisible by mutableStateOf(false)
     private set
   var composer by mutableStateOf("")
+    private set
   var appearance by mutableStateOf(store.appearance)
   var settingsVisible by mutableStateOf(false)
   /** The photo the user picked, waiting to go with the next message. */
   var pendingPhoto by mutableStateOf<PhotoAttachment?>(null)
+    private set
+  /** The file the user picked, waiting to go with the next message. */
+  var pendingFile by mutableStateOf<PeerFile?>(null)
     private set
   /** What the user has written for the question the agent asked. */
   var questionDraft by mutableStateOf("")
@@ -82,6 +97,27 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   /** The project the list is narrowed to, or null for every project. */
   var selectedProjectId by mutableStateOf<String?>(null)
     private set
+  /** What happens to a message sent while the agent is working. */
+  var followUpBehavior by mutableStateOf(store.followUpBehavior)
+    private set
+  /** Whether the sheet with the messages that wait is open. */
+  var queueSheetVisible by mutableStateOf(false)
+    private set
+  /** Whether the sheet that starts a new thread is open. */
+  var newThreadVisible by mutableStateOf(false)
+    private set
+  /** What the user writes for the new thread. */
+  var newThreadText by mutableStateOf("")
+    private set
+  /** The project the new thread belongs to. */
+  var newThreadProjectId by mutableStateOf<String?>(null)
+    private set
+  /** Whether the app posts a notification when the agent needs the user. */
+  var notificationsEnabled by mutableStateOf(store.notificationsEnabled)
+    private set
+  /** A short notice about what just happened. */
+  var notice by mutableStateOf<String?>(null)
+    private set
 
   private var session: PeerSession? = null
   private var threadStream: Int? = null
@@ -89,17 +125,20 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   private var reconnectAttempts = 0
   private var connectionGeneration = 0
   private var appliedLink: String? = null
-  private val lineStore = LinkedHashMap<String, ChatLine>()
-  private val runStore = LinkedHashMap<String, QueuedRun>()
-  private val messageStore = LinkedHashMap<String, PendingMessage>()
-  private val subagentStore = LinkedHashMap<String, SubagentSummary>()
+  private var threadState = PeerThreadState()
+  private val pendingSends = mutableListOf<PendingSend>()
   private var projectTitles = emptyMap<String, String>()
   private var projectRoots = emptyMap<String, String>()
   /** The messages the server found for the search. */
   private var messageMatches by mutableStateOf(emptyList<ThreadMessageMatch>())
-  /** The requests the app has answered, so a question is not asked twice. */
-  private val answeredRequests = mutableSetOf<String>()
   private var searchJob: Job? = null
+  private var noticeJob: Job? = null
+  private var undoAction: (() -> Unit)? = null
+  /** The thread the app should open once the list arrives. */
+  private var wantedThreadId: String? = null
+
+  /** A message the phone sent, waiting for the server to take it. */
+  private class PendingSend(val messageId: String, val line: ChatLine)
 
   init {
     // A saved session lets the app come back on its own.
@@ -126,18 +165,65 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
       return PeerSearch.rows(scoped, PeerSearch.fold(searchQuery), messageMatches)
     }
 
-  /**
-   * The question the agent is waiting on, when it has not been answered yet.
-   */
+  /** The threads that are waiting for the user to answer something. */
+  val attentionCount: Int
+    get() = threads.count { it.needsAttention }
+
+  /** The run that is working right now, if there is one. */
+  val activeRun: QueuedRun?
+    get() = threadState.activeRun
+
+  /** Whether the thread has a run that is still working. */
+  val isBusy: Boolean
+    get() = threadState.isBusy
+
+  /** The messages that wait for a run, in the order the queue holds them. */
+  val queuedRuns: List<QueuedRun>
+    get() = threadState.queuedRuns
+
+  /** Whether the queue is held, so nothing starts it on its own. */
+  val queueIsHeld: Boolean
+    get() = threadState.queueIsHeld
+
+  /** The question the agent is waiting on, when it has not been answered yet. */
   val pendingQuestion: AgentQuestion?
-    get() {
-      val asked = lines.lastOrNull { it.question != null }?.question ?: return null
-      return if (asked.requestId in answeredRequests) null else asked
-    }
+    get() = threadState.pendingQuestion
+
+  /** The approval the agent is waiting on, when it has not been answered yet. */
+  val pendingApproval: AgentApproval?
+    get() = threadState.pendingApproval
 
   /** The requests the app has answered, so a question is not asked twice. */
   val answeredRequestIds: Set<String>
-    get() = answeredRequests
+    get() = threadState.answeredRequestIds
+
+  /** The words a queued message will run. */
+  fun queuedText(run: QueuedRun): String = threadState.queuedText(run)
+
+  /**
+   * The mode the send button uses.
+   *
+   * A permission that is waiting changes the mode: a plain send would decline the
+   * permission and send the agent somewhere else, so the message steers instead.
+   */
+  val sendMode: ComposerDispatch
+    get() = modeFor(alternate = false)
+
+  /**
+   * The mode a send uses.
+   *
+   * A permission that is waiting steers, the way the official app steers, so the
+   * message reaches the waiting turn instead of declining what it asked for.
+   */
+  private fun modeFor(alternate: Boolean): ComposerDispatch {
+    val behavior = if (pendingApproval != null) FollowUpBehavior.STEER else followUpBehavior
+    return FollowUp.resolve(
+      running = threadState.isBusy,
+      canSteer = !threadState.activeRunIsCompaction,
+      behavior = behavior,
+      alternate = alternate,
+    )
+  }
 
   /** What the user has written for the question. */
   fun updateQuestionDraft(value: String) {
@@ -156,7 +242,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     val answer = questionDraft.trim()
     if (answer.isEmpty()) return
     questionDraft = ""
-    answeredRequests += question.requestId
+    threadState.markAnswered(question.requestId)
     viewModelScope.launch {
       try {
         session?.respondToRequest(thread.id, question.requestId, mapOf(question.id to answer))
@@ -164,6 +250,24 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         error = failure.message ?: "Could not answer the agent."
       }
     }
+    publishLines()
+    clearNotification()
+  }
+
+  /** Answers a permission the agent asked for. */
+  fun respondToApproval(decision: String) {
+    val thread = openThread ?: return
+    val approval = pendingApproval ?: return
+    threadState.markAnswered(approval.requestId)
+    viewModelScope.launch {
+      try {
+        session?.respondToApproval(thread.id, approval.requestId, decision)
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not answer the agent."
+      }
+    }
+    publishLines()
+    clearNotification()
   }
 
   /** Narrows the list to one project, or back to every project. */
@@ -203,6 +307,24 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   fun chooseAppearance(value: PeerAppearance) {
     appearance = value
     store.appearance = value
+  }
+
+  /** Sets what the user is writing, and keeps the words for the thread. */
+  fun updateComposer(value: String) {
+    composer = value
+    openThread?.let { store.setDraftFor(it.id, value) }
+  }
+
+  /** Sets what happens to a message sent while the agent is working. */
+  fun chooseFollowUpBehavior(value: FollowUpBehavior) {
+    followUpBehavior = value
+    store.followUpBehavior = value
+  }
+
+  /** Turns the notifications on or off. */
+  fun chooseNotifications(enabled: Boolean) {
+    notificationsEnabled = enabled
+    store.notificationsEnabled = enabled
   }
 
   fun showSettings() {
@@ -318,8 +440,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     session = null
     threads = emptyList()
     openThread = null
-    lines = emptyList()
-    lineStore.clear()
+    clearThread()
     environmentLabel = ""
     screen = PeerScreen.CONNECT
   }
@@ -334,27 +455,51 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun openThread(thread: ThreadSummary) {
-    answeredRequests.clear()
+    threadState.forgetAnswers()
     questionDraft = ""
     openThread = thread
-    lineStore.clear()
-    lines = emptyList()
+    clearThread()
+    composer = store.draftFor(thread.id)
     screen = PeerScreen.THREAD
     closeThreadStream()
     threadStream = session?.subscribeThread(thread.id, ::onThreadItem)
+    viewModelScope.launch {
+      try {
+        session?.visitThread(thread.id)
+      } catch (_: Exception) {
+        // Reading a thread does not need the server to accept the visit.
+      }
+    }
+  }
+
+  /** Opens a thread the app knows the id of, once the list has it. */
+  fun openThreadById(threadId: String) {
+    wantedThreadId = threadId
+    val thread = threads.firstOrNull { it.id == threadId }
+    if (thread != null) {
+      wantedThreadId = null
+      openThread(thread)
+    }
   }
 
   /** Leaves the thread and shows the list again, the way the back button does. */
   fun backToThreads() {
     openThread = null
-    lineStore.clear()
-    runStore.clear()
-    messageStore.clear()
-    subagentStore.clear()
-    lines = emptyList()
-    subagents = emptyList()
+    clearThread()
     screen = PeerScreen.THREADS
     closeThreadStream()
+  }
+
+  /** Forgets the thread the app was showing. */
+  private fun clearThread() {
+    threadState = PeerThreadState()
+    pendingSends.clear()
+    lines = emptyList()
+    subagents = emptyList()
+    composer = ""
+    pendingPhoto = null
+    pendingFile = null
+    questionDraft = ""
   }
 
   /** The old thread must stop streaming, or its items land in the new one. */
@@ -363,38 +508,311 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     threadStream = null
   }
 
-  fun send() {
+  /**
+   * Sends what the user wrote.
+   *
+   * @param alternate whether the user asked for the other mode for this message.
+   */
+  fun send(alternate: Boolean = false) {
     val text = composer.trim()
     val thread = openThread ?: return
     val photo = pendingPhoto
-    if (text.isEmpty() && photo == null) return
-    composer = ""
+    val file = pendingFile
+    if (text.isEmpty() && photo == null && file == null) return
+    val mode = modeFor(alternate)
+    val messageId = UUID.randomUUID().toString()
+    val line =
+      ChatLine(
+        id = "local:$messageId",
+        role = ChatRole.USER,
+        text = text,
+        streaming = false,
+        sending = true,
+        attachments =
+          listOfNotNull(
+            photo?.let { StoredAttachment(id = "", name = it.name, mimeType = it.mimeType, sizeBytes = it.sizeBytes) },
+            file?.let { StoredAttachment(id = "", name = it.name, mimeType = it.mimeType, sizeBytes = it.sizeBytes) },
+          ),
+      )
+    pendingSends += PendingSend(messageId, line)
+    updateComposer("")
     pendingPhoto = null
+    pendingFile = null
+    publishLines()
     viewModelScope.launch {
       try {
-        val session = session
-        if (session == null) {
-          error = "The connection to the server is gone."
-          return@launch
+        val session = session ?: throw PeerException("The connection to the server is gone.")
+        val stored = storeAttachments(thread.id, messageId, photo, file)
+        session.sendMessage(
+          threadId = thread.id,
+          text = text,
+          attachments = stored,
+          messageId = messageId,
+          dispatchMode = FollowUp.dispatchMode(mode),
+          deliveryIntent = FollowUp.deliveryIntent(mode),
+        )
+      } catch (failure: Exception) {
+        pendingSends.removeAll { it.messageId == messageId }
+        publishLines()
+        updateComposer(text)
+        error = failure.message ?: "Could not send the message."
+      }
+    }
+  }
+
+  /**
+   * Stores what the user attached, so the message carries the attachment the
+   * server gave back rather than the photo or the file itself.
+   */
+  private suspend fun storeAttachments(
+    threadId: String,
+    messageId: String,
+    photo: PhotoAttachment?,
+    file: PeerFile?,
+  ): List<StoredAttachment> {
+    val session = session ?: return emptyList()
+    val stored = mutableListOf<StoredAttachment>()
+    if (photo != null) {
+      session.persistAttachment(threadId, messageId, photo)?.let { stored += it }
+    }
+    if (file != null) {
+      session.uploadAttachment(threadId, messageId, file)?.let { stored += it }
+    }
+    return stored
+  }
+
+  /** Stops the run that is working, and holds the queue so nothing restarts it. */
+  fun stopRun() {
+    val thread = openThread ?: return
+    val run = threadState.activeRun ?: return
+    viewModelScope.launch {
+      try {
+        session?.interruptRun(thread.id, run.id)
+        showNotice("Stopping. The messages that wait stay waiting.")
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not stop the agent."
+      }
+    }
+  }
+
+  /** Releases the queue, so the messages that wait start again. */
+  fun resumeQueue() {
+    val thread = openThread ?: return
+    viewModelScope.launch {
+      try {
+        session?.resumeQueue(thread.id)
+        showNotice("The queue is running again.")
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not resume the queue."
+      }
+    }
+  }
+
+  /** Opens the sheet with the messages that wait. */
+  fun showQueue() {
+    queueSheetVisible = true
+  }
+
+  fun hideQueue() {
+    queueSheetVisible = false
+  }
+
+  /** Takes a queued message out of the queue. */
+  fun cancelQueuedRun(run: QueuedRun) {
+    val thread = openThread ?: return
+    viewModelScope.launch {
+      try {
+        session?.cancelQueuedRun(thread.id, run.id)
+        showNotice("The message was taken out of the queue.")
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not remove the message."
+      }
+    }
+  }
+
+  /** Changes what a queued message says. */
+  fun editQueuedRun(run: QueuedRun, text: String) {
+    val thread = openThread ?: return
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return
+    viewModelScope.launch {
+      try {
+        session?.editQueuedRun(thread.id, run.id, trimmed)
+        showNotice("The queued message was changed.")
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not change the message."
+      }
+    }
+  }
+
+  /**
+   * Sends a queued message now: on its own when nothing is working, and into the
+   * turn that is working otherwise.
+   */
+  fun sendQueuedNow(run: QueuedRun) {
+    val thread = openThread ?: return
+    viewModelScope.launch {
+      try {
+        val session = session ?: return@launch
+        val active = threadState.activeRun
+        if (active == null) {
+          session.startQueuedRun(thread.id, run.id)
+        } else {
+          session.promoteQueuedRun(thread.id, run.id, active.id)
         }
-        // The photo is stored first, so the message carries the attachment the server
-        // gave back rather than the photo itself.
-        val messageId = java.util.UUID.randomUUID().toString()
-        val stored =
-          if (photo == null) {
-            emptyList()
-          } else {
-            val attachment = session.persistAttachment(thread.id, messageId, photo)
-            if (attachment == null) {
-              error = "The photo could not be stored."
-              return@launch
-            }
-            listOf(attachment)
-          }
-        session.sendMessage(thread.id, text, stored, messageId)
+        showNotice("The message is on its way.")
       } catch (failure: Exception) {
         error = failure.message ?: "Could not send the message."
       }
+    }
+  }
+
+  /** Opens the sheet that starts a new thread. */
+  fun showNewThread() {
+    newThreadVisible = true
+    newThreadText = ""
+    newThreadProjectId = selectedProjectId ?: threads.firstOrNull()?.projectId
+  }
+
+  fun hideNewThread() {
+    newThreadVisible = false
+  }
+
+  /** Sets what the new thread says. */
+  fun updateNewThreadText(value: String) {
+    newThreadText = value
+  }
+
+  /** Sets the project the new thread belongs to. */
+  fun selectNewThreadProject(projectId: String) {
+    newThreadProjectId = projectId
+  }
+
+  /** Starts a new thread with what the user wrote. */
+  fun startNewThread() {
+    val text = newThreadText.trim()
+    val projectId = newThreadProjectId ?: return
+    if (text.isEmpty()) return
+    val template = threads.firstOrNull { it.projectId == projectId }
+    if (template?.modelSelection == null) {
+      error = "This project has no thread to take the model from yet. Open one first."
+      return
+    }
+    viewModelScope.launch {
+      try {
+        val session = session ?: throw PeerException("The connection to the server is gone.")
+        val threadId =
+          session.launchThread(
+            projectId = projectId,
+            title = text.take(60),
+            text = text,
+            modelSelection = template?.modelSelection,
+            runtimeMode = template?.runtimeMode.orEmpty(),
+            interactionMode = template?.interactionMode.orEmpty(),
+            branch = template?.branch?.ifEmpty { null },
+          )
+        newThreadVisible = false
+        if (threadId != null) {
+          showNotice("The thread was started.")
+          openThreadById(threadId)
+        }
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not start the thread."
+      }
+    }
+  }
+
+  /** Puts a thread away, and takes it back out again. */
+  fun setThreadArchived(thread: ThreadSummary, archived: Boolean) {
+    viewModelScope.launch {
+      try {
+        session?.setThreadArchived(thread.id, archived)
+        showNotice(if (archived) "The thread was put away." else "The thread is back.")
+        if (archived) {
+          threads = threads.filterNot { it.id == thread.id }
+        }
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not change the thread."
+      }
+    }
+  }
+
+  /** Gives a thread a new name. */
+  fun renameThread(thread: ThreadSummary, title: String) {
+    val trimmed = title.trim()
+    if (trimmed.isEmpty()) return
+    viewModelScope.launch {
+      try {
+        session?.renameThread(thread.id, trimmed)
+        threads = threads.map { if (it.id == thread.id) it.copy(title = trimmed) else it }
+        if (openThread?.id == thread.id) openThread = openThread?.copy(title = trimmed)
+        showNotice("The thread was renamed.")
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not rename the thread."
+      }
+    }
+  }
+
+  /** Removes a thread, and says so in a way the user can take back. */
+  fun deleteThread(thread: ThreadSummary) {
+    val removed = thread
+    threads = threads.filterNot { it.id == thread.id }
+    viewModelScope.launch {
+      try {
+        session?.deleteThread(thread.id)
+        showNotice("The thread was deleted.", undo = {
+          viewModelScope.launch {
+            runCatching { session?.setThreadArchived(removed.id, false) }
+          }
+        })
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not delete the thread."
+      }
+    }
+  }
+
+  /** Wakes a snoozed thread, or puts it back to sleep. */
+  fun setThreadSnoozed(thread: ThreadSummary, snoozed: Boolean) {
+    viewModelScope.launch {
+      try {
+        session?.setThreadSnoozed(thread.id, snoozed)
+        showNotice(if (snoozed) "The thread is asleep." else "The thread is awake.")
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not change the thread."
+      }
+    }
+  }
+
+  /** Marks a thread as not read, so the list points at it again. */
+  fun markThreadUnread(thread: ThreadSummary) {
+    viewModelScope.launch {
+      try {
+        session?.markThreadUnread(thread.id)
+        showNotice("The thread was marked unread.")
+      } catch (failure: Exception) {
+        error = failure.message ?: "Could not mark the thread."
+      }
+    }
+  }
+
+  /** Takes back what the notice offered. */
+  fun undoNotice() {
+    val action = undoAction
+    undoAction = null
+    notice = null
+    noticeJob?.cancel()
+    action?.invoke()
+  }
+
+  /** Says what just happened, and offers to take it back. */
+  private fun showNotice(message: String, undo: (() -> Unit)? = null) {
+    undoAction = undo
+    notice = message
+    noticeJob?.cancel()
+    noticeJob = viewModelScope.launch {
+      delay(NOTICE_MS)
+      notice = null
+      undoAction = null
     }
   }
 
@@ -409,9 +827,25 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     pendingPhoto = photo
   }
 
+  /** Picks a file to send with the next message. */
+  fun attachFile(uri: android.net.Uri) {
+    val context = getApplication<Application>()
+    val file = PeerFiles.prepare(uri, context.contentResolver)
+    if (file == null) {
+      error = "That file could not be read, or it is too big."
+      return
+    }
+    pendingFile = file
+  }
+
   /** Drops the photo the user picked. */
   fun clearPendingPhoto() {
     pendingPhoto = null
+  }
+
+  /** Drops the file the user picked. */
+  fun clearPendingFile() {
+    pendingFile = null
   }
 
   /**
@@ -499,6 +933,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         readThreads(snapshot.optJSONArray("threads"), collected)
         readThreads(snapshot.optJSONArray("archivedThreads"), collected)
         threads = orderThreads(listed(collected))
+        wantedThreadId?.let { openThreadById(it) }
       }
 
       "thread.updated" -> {
@@ -523,75 +958,64 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     when (item.optString("kind")) {
       "snapshot" -> {
         val projection = item.optJSONObject("projection") ?: return
-        lineStore.clear()
-        PeerParsing.lines(projection).forEach { lineStore[it.id] = it }
-        runStore.clear()
-        PeerParsing.runs(projection).forEach { runStore[it.id] = it }
-        messageStore.clear()
-        PeerParsing.messages(projection).forEach { messageStore[it.id] = it }
-        subagentStore.clear()
-        PeerParsing.subagents(projection).forEach { subagentStore[it.id] = it }
+        threadState.readSnapshot(projection)
         publishLines()
         publishSubagents()
       }
 
       "event" -> {
         val event = item.optJSONObject("event") ?: return
-        when (event.optString("type")) {
-          "turn-item.updated" -> {
-            val payload = event.optJSONObject("payload") ?: return
-            val line = PeerParsing.line(payload) ?: return
-            lineStore[line.id] = line
-            publishLines()
+        if (event.optString("type") == "thread.updated") {
+          val title = event.optJSONObject("payload")?.optString("title").orEmpty()
+          if (title.isNotEmpty()) {
+            openThread = openThread?.copy(title = title)
           }
-
-          "run.updated" -> {
-            val payload = event.optJSONObject("payload") ?: return
-            val run = PeerParsing.run(payload) ?: return
-            runStore[run.id] = run
-            publishLines()
-          }
-
-          "message.updated" -> {
-            val payload = event.optJSONObject("payload") ?: return
-            val message = PeerParsing.message(payload) ?: return
-            messageStore[message.id] = message
-            publishLines()
-          }
-
-          "subagent.updated" -> {
-            val payload = event.optJSONObject("payload") ?: return
-            val subagent = PeerParsing.subagent(payload) ?: return
-            subagentStore[subagent.id] = subagent
-            publishSubagents()
-          }
-
-          "thread.updated" -> {
-            val payload = event.optJSONObject("payload") ?: return
-            val title = payload.optString("title")
-            if (title.isNotEmpty()) {
-              openThread = openThread?.copy(title = title)
-            }
-          }
+          return
         }
+        if (!threadState.readEvent(event)) return
+        publishLines()
+        publishSubagents()
+        notifyWhenNeeded()
       }
     }
   }
 
   /**
-   * The chat, with the messages no run has started yet at the end. They stay
-   * apart from the turn items: a queued message turns into a turn item under
-   * its own id, so keeping them together would show it twice.
+   * The chat, with the messages the phone sent but the server has not taken yet.
+   * They stay apart from the turn items: a queued message turns into a turn item
+   * under its own id, so keeping them together would show it twice.
    */
   private fun publishLines() {
-    lines = lineStore.values.toList() + pendingLines()
+    val local =
+      pendingSends
+        .filter { !threadState.hasMessage(it.messageId) }
+        .map { it.line }
+    lines = threadState.lines + local
   }
 
-  private fun pendingLines(): List<ChatLine> =
-    PeerParsing.pendingLines(runStore.values.toList(), messageStore.values.toList())
-
   private fun publishSubagents() {
-    subagents = subagentStore.values.sortedBy { it.startedAt }
+    subagents = threadState.subagents
+  }
+
+  /** Takes the notification away, for work the user has seen. */
+  private fun clearNotification() {
+    PeerNotifications.clear(getApplication<Application>())
+  }
+
+  /** Tells the user about the agent that needs them. */
+  private fun notifyWhenNeeded() {
+    if (!notificationsEnabled) return
+    val thread = openThread ?: return
+    val approval = threadState.pendingApproval
+    val question = threadState.pendingQuestion
+    val context = getApplication<Application>()
+    when {
+      approval != null ->
+        PeerNotifications.postNeedsAttention(context, thread.id, thread.title, "Approve")
+      question != null ->
+        PeerNotifications.postNeedsAttention(context, thread.id, thread.title, "Answer")
+      else -> return
+    }
   }
 
   /** Subagents and side chats live inside their parent, never in the list. */
@@ -633,6 +1057,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   override fun onCleared() {
     super.onCleared()
     searchJob?.cancel()
+    noticeJob?.cancel()
     // The app is gone, so the socket has nothing to talk to.
     session?.close()
     session = null

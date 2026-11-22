@@ -86,6 +86,17 @@ class ThreadStateTest {
     assertEquals(listOf("completed", "older"), ordered.map { it.id })
   }
 
+  @Test
+  fun `a thread that waits for the user comes first of all`() {
+    val waiting = thread(id = "waiting", status = "waiting").copy(needsAttention = true)
+    val working = thread(id = "working", status = "running")
+
+    val ordered = orderThreads(listOf(working, waiting))
+
+    assertEquals(listOf("waiting", "working"), ordered.map { it.id })
+    assertEquals(ThreadState.ATTENTION, ThreadState.of(waiting))
+  }
+
   private fun thread(
     id: String = "thread-1",
     status: String = "idle",

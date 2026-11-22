@@ -1,7 +1,8 @@
 package com.t3tools.peer.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -22,20 +24,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.t3tools.peer.model.ProjectChoice
@@ -43,26 +49,34 @@ import com.t3tools.peer.model.ProjectIdentity
 import com.t3tools.peer.model.SearchSource
 import com.t3tools.peer.model.ThreadListRow
 import com.t3tools.peer.model.ThreadState
+import com.t3tools.peer.model.ThreadSummary
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ThreadListScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
   val palette = LocalPeerPalette.current
   val rows = viewModel.threadRows
+  var actionsFor by remember { mutableStateOf<ThreadSummary?>(null) }
   Surface(modifier = modifier.fillMaxSize(), color = palette.screen) {
-    Column(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
+      Column(modifier = Modifier.fillMaxSize()) {
       Header(
         environmentLabel = viewModel.environmentLabel,
+        attentionCount = viewModel.attentionCount,
         onDisconnect = viewModel::disconnect,
         onSettings = viewModel::showSettings,
       )
       SearchField(
         query = viewModel.searchQuery,
-        onQueryChange = viewModel::updateSearchQuery,
+        onQueryChange = { viewModel.updateSearchQuery(it) },
       )
       ProjectFilter(
         projects = viewModel.projects,
         selectedProjectId = viewModel.selectedProjectId,
-        onSelect = viewModel::selectProject,
+        onSelect = { viewModel.selectProject(it) },
       )
       if (viewModel.threads.isEmpty()) {
         Column(
@@ -94,16 +108,56 @@ fun ThreadListScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
             if (rows.getOrNull(index - 1)?.state != row.state) {
               GroupHeader(row.state)
             }
-            ThreadRow(row) { viewModel.openThread(row.thread) }
+            ThreadRow(
+              row = row,
+              onOpen = { viewModel.openThread(row.thread) },
+              onHold = { actionsFor = row.thread },
+            )
           }
         }
       }
+      NoticeBar(
+        notice = viewModel.notice,
+        onUndo = viewModel::undoNotice,
+      )
+      }
+      FloatingActionButton(
+        onClick = viewModel::showNewThread,
+        containerColor = palette.primary,
+        contentColor = palette.onPrimary,
+        modifier =
+          Modifier
+            .align(Alignment.BottomEnd)
+            .padding(16.dp)
+            .navigationBarsPadding(),
+      ) {
+        Icon(Icons.Filled.Add, contentDescription = "Start a new thread")
+      }
     }
+  }
+  actionsFor?.let { thread ->
+    ThreadActionsSheet(
+      thread = thread,
+      onDismiss = { actionsFor = null },
+      onArchive = { viewModel.setThreadArchived(thread, true); actionsFor = null },
+      onRename = { title -> viewModel.renameThread(thread, title); actionsFor = null },
+      onSnooze = { viewModel.setThreadSnoozed(thread, true); actionsFor = null },
+      onMarkUnread = { viewModel.markThreadUnread(thread); actionsFor = null },
+      onDelete = { viewModel.deleteThread(thread); actionsFor = null },
+    )
+  }
+  if (viewModel.newThreadVisible) {
+    NewThreadSheet(viewModel)
   }
 }
 
 @Composable
-private fun Header(environmentLabel: String, onDisconnect: () -> Unit, onSettings: () -> Unit) {
+private fun Header(
+  environmentLabel: String,
+  attentionCount: Int,
+  onDisconnect: () -> Unit,
+  onSettings: () -> Unit,
+) {
   val palette = LocalPeerPalette.current
   Row(
     modifier =
@@ -130,6 +184,20 @@ private fun Header(environmentLabel: String, onDisconnect: () -> Unit, onSetting
           .padding(horizontal = 6.dp, vertical = 2.dp),
     )
     Spacer(Modifier.weight(1f))
+    if (attentionCount > 0) {
+      Text(
+        "$attentionCount need you",
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = palette.danger,
+        modifier =
+          Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(palette.grouped)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+      )
+      Spacer(Modifier.width(8.dp))
+    }
     if (environmentLabel.isNotEmpty()) {
       Text(
         environmentLabel,
@@ -258,13 +326,48 @@ private fun ProjectChip(label: String, selected: Boolean, onClick: () -> Unit) {
   )
 }
 
+/** A short notice about what just happened, with a way to take it back. */
 @Composable
-private fun ThreadRow(row: ThreadListRow, onOpen: () -> Unit) {
+private fun NoticeBar(notice: String?, onUndo: () -> Unit) {
+  if (notice == null) return
+  val palette = LocalPeerPalette.current
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 16.dp, vertical = 8.dp)
+        .clip(RoundedCornerShape(12.dp))
+        .background(palette.grouped)
+        .padding(horizontal = 14.dp, vertical = 10.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      notice,
+      style = MaterialTheme.typography.bodySmall,
+      color = palette.foreground,
+      modifier = Modifier.weight(1f),
+    )
+    Text(
+      "Undo",
+      style = MaterialTheme.typography.labelMedium,
+      color = palette.primary,
+      modifier = Modifier.clickable(onClick = onUndo).padding(start = 12.dp),
+    )
+  }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ThreadRow(row: ThreadListRow, onOpen: () -> Unit, onHold: () -> Unit) {
   val palette = LocalPeerPalette.current
   val thread = row.thread
   val status = threadStateLabel(thread) ?: if (justFinished(thread.latestRunCompletedAt)) "Finished" else null
   Column(
-    modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 20.dp, vertical = 9.dp),
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .combinedClickable(onClick = onOpen, onLongClick = onHold)
+        .padding(horizontal = 20.dp, vertical = 9.dp),
     verticalArrangement = Arrangement.spacedBy(3.dp),
   ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -293,7 +396,17 @@ private fun ThreadRow(row: ThreadListRow, onOpen: () -> Unit) {
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.weight(1f),
       )
-      if (status != null) {
+      if (thread.needsAttention) {
+        Spacer(Modifier.width(8.dp))
+        Box(
+          modifier =
+            Modifier
+              .size(8.dp)
+              .clip(CircleShape)
+              .background(palette.danger)
+              .padding(top = 6.dp),
+        )
+      } else if (status != null) {
         Spacer(Modifier.width(8.dp))
         Text(
           status,
@@ -337,6 +450,7 @@ private fun GroupHeader(state: ThreadState) {
   val palette = LocalPeerPalette.current
   Text(
     when (state) {
+      ThreadState.ATTENTION -> "Needs you"
       ThreadState.WORKING -> "Working"
       ThreadState.FINISHED -> "Finished"
       ThreadState.IDLE -> "Idle"

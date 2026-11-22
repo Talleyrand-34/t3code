@@ -12,24 +12,42 @@ one connection, lists the server's threads, opens one, and sends messages.
 
 - Pair with a server using the one-time code from `t3 pair`, or open a pairing
   link with the app.
-- List the threads on that server, with their project and state. The list is grouped the way the desktop app groups it: working threads, then the ones that finished, then the idle ones, and every project wears a colour and a monogram of its own.
-- Narrow the list to one project, and search it: a thread whose own title matches comes first, and the ones a message inside them matched follow.
-- Answer a question the agent asked on the thread, or pick one of the options it offered.
-- Attach a photo to a message. The photo is scaled down, stored by the server, and shown in the thread.
+- List the threads on that server, with their project and state. The list is
+  grouped the way the desktop app groups it: the threads that wait for you,
+  then the ones that are working, then the ones that finished, then the idle
+  ones, and every project wears a colour and a monogram of its own.
+- Narrow the list to one project, and search it: a thread whose own title
+  matches comes first, and the ones a message inside them matched follow.
+- Answer a question the agent asked on the thread, or pick one of the options
+  it offered.
+- Approve what the agent asks for, on the thread: allow it once, allow it for
+  the session, or decline it.
+- Attach a photo or a file to a message. The file is scaled or sent to the
+  server, stored by it, and shown in the thread.
 - Open a thread, read it, and watch it fill while the agent works.
 - See the messages the server took but has not run yet, and the subagents of
   the thread you are in.
 - Send a message and let the server run the turn.
+- Send a message while the agent is still working, and say what it should do:
+  wait for the turn to finish, or reach the agent right away. The setting says
+  which one you usually want; holding the send button picks the other one for
+  a single message.
+- Stop the agent. Stopping holds the messages that wait, so the queue says it
+  is paused and offers to let it go again.
+- Change a message that waits, take it out of the queue, or send it on its own
+  while nothing else is working.
 - Stay connected: the session is kept, a dropped socket reconnects on its own,
   and a host that goes away is noticed.
+- Get a notification when the agent needs you, as long as the app is running.
+- Start a new thread from the phone, on the model and mode the project uses.
 - Paint itself light, dark, or follow the system, from the settings sheet.
 - Move the thread to another branch, from the branch in its header.
 
 ## What it does not do
 
-Plan editing, pull requests, thread creation, approvals, and the
-settings screens all live in the full app. This one is a reader and a way to
-start a turn.
+Plan editing, pull requests, thread diffs, checkpoints, the terminal, file
+browsing, browser previews, MCP apps, and the settings screens all live in the
+full app. This one is a reader and a way to run a turn.
 
 ## Pairing with a host
 
@@ -103,6 +121,23 @@ After the first pairing the app reuses the session, so the code is not needed
 again. The socket is checked every ten seconds, and a host that stops
 answering is treated as a dropped connection: the app retries with a backoff
 of up to a minute.
+
+## What the app asks the server to do
+
+Every command goes through the server's `orchestration.dispatchCommand`, so the
+pairing scopes above are enough for all of it.
+
+| What the user does                                          | What the app sends                                                                                  |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Sends a message while the agent works, and wants it to wait | `message.dispatch` with `dispatchMode: queue_after_active`                                          |
+| Sends a message while the agent works, and wants it now     | `message.dispatch` with `deliveryIntent: auto`, so a provider that cannot steer takes it as a queue |
+| Stops the agent                                             | `run.interrupt` with `holdQueue`, so the messages that wait stay waiting                            |
+| Lets the queue go again                                     | `queue.resume`                                                                                      |
+| Sends a queued message on its own                           | `queued-run.start`, or `queued-message.promote-to-steer` into the turn that is working              |
+| Changes or removes a queued message                         | `queued-run.edit`, `queued-run.cancel`                                                              |
+| Approves something                                          | `runtime-request.respond` with a decision                                                           |
+| Answers a question                                          | `runtime-request.respond` with answers                                                              |
+| Starts a new thread                                         | `orchestration.launchThread`                                                                        |
 
 ## License
 

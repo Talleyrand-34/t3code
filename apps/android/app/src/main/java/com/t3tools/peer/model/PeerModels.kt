@@ -19,6 +19,16 @@ data class ThreadSummary(
   val latestRunCompletedAt: String = "",
   /** When the thread's run settled. A settled thread is finished, an idle one is not. */
   val settledAt: String = "",
+  /** Whether the agent is waiting for the user to answer something. */
+  val needsAttention: Boolean = false,
+  /** What the agent is waiting for, when it is waiting. */
+  val pendingRequestKind: String = "",
+  /** The model the thread runs on, which a new thread of the same project takes. */
+  val modelSelection: JSONObject? = null,
+  /** The mode the thread runs in, which a new thread of the same project takes. */
+  val runtimeMode: String = "",
+  /** How the agent talks to the user, which a new thread of the same project takes. */
+  val interactionMode: String = "",
 )
 
 /** A project the server knows, by name. */
@@ -33,8 +43,14 @@ data class ChatLine(
   val streaming: Boolean,
   /** The server has the message, but no run has started it yet. */
   val pending: Boolean = false,
+  /** The phone has the message, but the server has not taken it yet. */
+  val sending: Boolean = false,
+  /** The message the line carries, when the server knows it. */
+  val messageId: String = "",
   /** The question the agent asked, when this line is one. */
   val question: AgentQuestion? = null,
+  /** The permission the agent asked for, when this line is one. */
+  val approval: AgentApproval? = null,
   /** The photos the message carries. */
   val attachments: List<StoredAttachment> = emptyList(),
 )
@@ -65,6 +81,8 @@ data class QueuedRun(
   val status: String,
   val ordinal: Int,
   val queuePosition: Int?,
+  /** Whether the queue is held, so nothing starts it on its own. */
+  val held: Boolean = false,
 )
 
 /** A message the user sent that the server keeps for a later run. */
@@ -103,6 +121,7 @@ object PeerParsing {
     val lineage = shell.optJSONObject("lineage")
     val relationshipToParent = lineage?.optString("relationshipToParent").orEmpty()
     val sideChat = lineage?.optBoolean("sideChat") ?: false
+    val pendingRequest = shell.optJSONObject("pendingRuntimeRequest")
     return ThreadSummary(
       id = shell.optString("id"),
       title = shell.optString("title").ifEmpty { "Untitled" },
@@ -117,6 +136,11 @@ object PeerParsing {
       latestRunCompletedAt =
         if (shell.isNull("latestRunCompletedAt")) "" else shell.optString("latestRunCompletedAt"),
       settledAt = if (shell.isNull("settledAt")) "" else shell.optString("settledAt"),
+      needsAttention = pendingRequest != null,
+      pendingRequestKind = pendingRequest?.optString("kind").orEmpty(),
+      modelSelection = shell.optJSONObject("modelSelection"),
+      runtimeMode = shell.optString("runtimeMode"),
+      interactionMode = shell.optString("interactionMode"),
     )
   }
 
@@ -148,6 +172,7 @@ object PeerParsing {
           ChatRole.USER,
           item.optString("text"),
           streaming,
+          messageId = item.optString("messageId"),
           attachments = attachments(item),
         )
 
@@ -173,7 +198,13 @@ object PeerParsing {
         )
 
       "approval_request" ->
-        ChatLine(id, ChatRole.SYSTEM, "The agent asked for approval.", false)
+        ChatLine(
+          id,
+          ChatRole.SYSTEM,
+          "The agent asked for approval.",
+          false,
+          approval = PeerApprovals.from(item),
+        )
 
       "command_execution" ->
         ChatLine(id, ChatRole.SYSTEM, "Ran a command.", false)
@@ -270,6 +301,7 @@ object PeerParsing {
       status = run.optString("status"),
       ordinal = run.optInt("ordinal", 0),
       queuePosition = if (run.isNull("queuePosition")) null else run.optInt("queuePosition"),
+      held = run.optBoolean("queueHeld", false),
     )
   }
 
