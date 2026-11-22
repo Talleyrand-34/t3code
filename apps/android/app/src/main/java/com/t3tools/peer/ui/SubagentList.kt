@@ -12,10 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,8 +27,9 @@ import com.t3tools.peer.model.SubagentSummary
  * The other agents working inside this thread. A subagent is not a thread of
  * its own here: it belongs to the thread that started it.
  *
- * The list folds away, the way the official app folds its group of subagents,
- * so a thread with many of them does not push the chat off the screen.
+ * The list folds away behind a button, the way the official app folds its group
+ * of subagents, so a thread with many of them does not push the chat off the
+ * screen.
  */
 @Composable
 fun SubagentList(
@@ -47,20 +44,20 @@ fun SubagentList(
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
     Row(
-      modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 2.dp),
+      modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Icon(
-        if (collapsed) Icons.Filled.KeyboardArrowRight else Icons.Filled.KeyboardArrowDown,
-        contentDescription = if (collapsed) "Show subagents" else "Hide subagents",
-        tint = palette.muted,
-        modifier = Modifier.size(16.dp),
-      )
-      Spacer(Modifier.width(4.dp))
       Text(
         if (subagents.size == 1) "1 subagent" else "${subagents.size} subagents",
         style = MaterialTheme.typography.labelMedium,
         color = palette.muted,
+        modifier = Modifier.weight(1f),
+      )
+      Text(
+        if (collapsed) "Show" else "Hide",
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.primary,
+        modifier = Modifier.clickable(onClick = onToggle).padding(horizontal = 6.dp, vertical = 2.dp),
       )
     }
     if (collapsed) return

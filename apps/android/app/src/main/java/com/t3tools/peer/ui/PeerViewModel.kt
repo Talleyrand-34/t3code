@@ -76,6 +76,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   /** Whether the list of subagents is folded away. */
   var subagentsCollapsed by mutableStateOf(false)
     private set
+
   /** The branch of the open thread, and the branches it can move to. */
   var branches by mutableStateOf(emptyList<BranchRef>())
     private set
@@ -280,7 +281,9 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
 
   /** Folds the list of subagents away, or opens it again. */
   fun toggleSubagents() {
-    subagentsCollapsed = !subagentsCollapsed
+    threadState.toggleSubagents()
+    subagentsCollapsed = threadState.subagentsCollapsed
+    subagents = threadState.visibleSubagents
   }
 
   /** Narrows the list to one project, or back to every project. */
@@ -1026,7 +1029,8 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         .filter { !threadState.hasMessage(it.messageId) }
         .map { it.line }
     lines = threadState.lines + local
-    subagents = threadState.subagents
+    subagents = threadState.visibleSubagents
+    subagentsCollapsed = threadState.subagentsCollapsed
   }
 
   /** Takes the notification away, for work the user has seen. */

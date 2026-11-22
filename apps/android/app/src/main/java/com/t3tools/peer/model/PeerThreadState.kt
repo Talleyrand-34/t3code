@@ -27,6 +27,19 @@ class PeerThreadState {
   val subagents: List<SubagentSummary>
     get() = subagentStore.values.sortedBy { it.startedAt }
 
+  /** Whether the list of subagents is folded away. */
+  var subagentsCollapsed: Boolean = false
+    private set
+
+  /** Folds the list of subagents away, or opens it again. */
+  fun toggleSubagents() {
+    subagentsCollapsed = !subagentsCollapsed
+  }
+
+  /** The subagents the thread shows: none of them while the group is folded away. */
+  val visibleSubagents: List<SubagentSummary>
+    get() = if (subagentsCollapsed) emptyList() else subagents
+
   /** The run that is working right now, if there is one. */
   val activeRun: QueuedRun?
     get() = runStore.values.filter { it.status in ACTIVE_STATUSES }.maxByOrNull { it.ordinal }
