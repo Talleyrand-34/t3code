@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -35,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,7 +61,18 @@ import androidx.compose.ui.text.style.TextOverflow
 fun ThreadListScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
   val palette = LocalPeerPalette.current
   val rows = viewModel.threadRows
+  val listState = rememberLazyListState()
   var actionsFor by remember { mutableStateOf<ThreadSummary?>(null) }
+
+  // A thread that arrives goes to the top of the list, but the list keeps the row
+  // it was showing, so the new one lands above the screen. When the reader is at
+  // the top, the list follows them there.
+  val topThreadId = rows.firstOrNull()?.thread?.id
+  LaunchedEffect(topThreadId) {
+    if (topThreadId != null && listState.firstVisibleItemIndex == 0) {
+      listState.scrollToItem(0)
+    }
+  }
   Surface(modifier = modifier.fillMaxSize(), color = palette.screen) {
     Box(modifier = Modifier.fillMaxSize()) {
       Column(modifier = Modifier.fillMaxSize()) {
@@ -103,7 +116,11 @@ fun ThreadListScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
           )
         }
       } else {
-        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = bottomPadding()) {
+        LazyColumn(
+          state = listState,
+          modifier = Modifier.fillMaxSize(),
+          contentPadding = bottomPadding(),
+        ) {
           itemsIndexed(rows, key = { _, row -> row.thread.id }) { index, row ->
             if (rows.getOrNull(index - 1)?.state != row.state) {
               GroupHeader(row.state)
