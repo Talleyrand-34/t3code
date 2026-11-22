@@ -20,7 +20,7 @@ data class ThreadListRow(
   val snippet: String = "",
   /** Null for a row that is not a hit, which is every row outside a search. */
   val source: SearchSource? = null,
-  /** The group the row belongs to: working, finished or idle. */
+  /** The group the row belongs to: needs you, working, finished or idle. */
   val state: ThreadState = ThreadState.IDLE,
 )
 
@@ -36,6 +36,9 @@ object PeerSearch {
   /** The shortest query the server accepts. */
   const val MIN_QUERY_LENGTH = 2
 
+  /** The longest query the server accepts. */
+  const val MAX_QUERY_LENGTH = 200
+
   /** The query as the server folds it: lower case, no wrapping quotes, single spaces. */
   fun fold(query: String): String =
     query
@@ -48,6 +51,9 @@ object PeerSearch {
 
   /** Whether the query is long enough for the server to answer it. */
   fun isSearchable(query: String): Boolean = fold(query).length >= MIN_QUERY_LENGTH
+
+  /** The query as the server takes it: trimmed and no longer than it accepts. */
+  fun forServer(query: String): String = query.trim().take(MAX_QUERY_LENGTH)
 
   /** Whether the thread's own text carries every word of the query. */
   fun matchesThreadText(thread: ThreadSummary, foldedQuery: String): Boolean {
@@ -71,22 +77,25 @@ object PeerSearch {
   ): List<ThreadListRow> {
     val searching = foldedQuery.isNotEmpty()
     val matchByThread = messageMatches.distinctBy { it.threadId }.associateBy { it.threadId }
-    val rows = threads.mapNotNull { thread ->
-      val titleHit = searching && matchesThreadText(thread, foldedQuery)
-      val match = if (searching && !titleHit) matchByThread[thread.id] else null
-      if (searching && !titleHit && match == null) return@mapNotNull null
-      ThreadListRow(
-        thread,
-        snippet = match?.snippet ?: "",
-        source =
-          when {
-            titleHit -> SearchSource.TITLE
-            match != null -> SearchSource.MESSAGE
-            else -> null
-          },
-        state = ThreadState.of(thread),
-      )
-    }
+    // The list gives every row a key, so a thread that arrives twice would take
+    // the list down with it.
+    val rows =
+      threads.distinctBy { it.id }.mapNotNull { thread ->
+        val titleHit = searching && matchesThreadText(thread, foldedQuery)
+        val match = if (searching && !titleHit) matchByThread[thread.id] else null
+        if (searching && !titleHit && match == null) return@mapNotNull null
+        ThreadListRow(
+          thread,
+          snippet = match?.snippet ?: "",
+          source =
+            when {
+              titleHit -> SearchSource.TITLE
+              match != null -> SearchSource.MESSAGE
+              else -> null
+            },
+          state = ThreadState.of(thread),
+        )
+      }
     return ThreadState.ORDER.flatMap { state ->
       rows.filter { it.state == state }.sortedWith(rowOrder)
     }
@@ -124,12 +133,38 @@ object PeerSearch {
         ThreadMessageMatch(
           threadId = threadId,
           projectId = match.optString("projectId"),
-          snippet = match.optString("snippet"),
+          snippet = plainSnippet(match.optString("snippet")),
           messageCreatedAt = match.optString("messageCreatedAt"),
         )
     }
     return parsed
   }
+
+  /**
+   * The snippet as plain text.
+   *
+   * The server hands back the message as it was written, so it carries the
+   * markdown the agent wrote. A list row shows words, not markup.
+   */
+  fun plainSnippet(snippet: String): String {
+    val plain =
+      snippet
+        .replace("```", " ")
+        .replace(Regex("(?m)^\\s{0,3}#{1,6}\\s+"), "")
+        .replace(Regex("(?m)^\\s{0,3}[-*+]\\s+"), "")
+        .replace("**", "")
+        .replace("__", "")
+        .replace("`", "")
+        .replace("|", " ")
+        .replace(Regex("[*_]"), "")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    if (plain.length <= MAX_SNIPPET_LENGTH) return plain
+    return plain.take(MAX_SNIPPET_LENGTH).trimEnd() + "…"
+  }
+
+  /** How long a snippet shows before it is cut. */
+  private const val MAX_SNIPPET_LENGTH = 140
 
   private val WHITESPACE = Regex("\\s+")
 }

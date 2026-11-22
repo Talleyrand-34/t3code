@@ -300,13 +300,15 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
       messageMatches = emptyList()
       return
     }
-    val query = value.trim()
+    val query = PeerSearch.forServer(value)
     searchJob = viewModelScope.launch {
       delay(SEARCH_DEBOUNCE_MS)
       val session = session ?: return@launch
       try {
         val matches = session.searchMessages(query)
         if (searchQuery.trim() == query) messageMatches = matches
+      } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
       } catch (_: Exception) {
         // A search that fails leaves the titles, which the app already knows.
       }
@@ -953,7 +955,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         val collected = mutableListOf<ThreadSummary>()
         readThreads(snapshot.optJSONArray("threads"), collected)
         readThreads(snapshot.optJSONArray("archivedThreads"), collected)
-        threads = orderThreads(listed(collected))
+        threads = orderThreads(listed(collected).distinctBy { it.id })
         wantedThreadId?.let { openThreadById(it) }
       }
 
