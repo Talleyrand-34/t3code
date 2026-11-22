@@ -73,6 +73,9 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   /** The other agents working inside the open thread. */
   var subagents by mutableStateOf(emptyList<SubagentSummary>())
     private set
+  /** Whether the list of subagents is folded away. */
+  var subagentsCollapsed by mutableStateOf(false)
+    private set
   /** The branch of the open thread, and the branches it can move to. */
   var branches by mutableStateOf(emptyList<BranchRef>())
     private set
@@ -169,33 +172,38 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
   val attentionCount: Int
     get() = threads.count { it.needsAttention }
 
-  /** The run that is working right now, if there is one. */
-  val activeRun: QueuedRun?
-    get() = threadState.activeRun
+  /**
+   * The run that is working right now, if there is one.
+   *
+   * Everything the thread holds is published as state: the screen reads these
+   * values while it draws, so a plain getter would never redraw it.
+   */
+  var activeRun by mutableStateOf<QueuedRun?>(null)
+    private set
 
   /** Whether the thread has a run that is still working. */
-  val isBusy: Boolean
-    get() = threadState.isBusy
+  var isBusy by mutableStateOf(false)
+    private set
 
   /** The messages that wait for a run, in the order the queue holds them. */
-  val queuedRuns: List<QueuedRun>
-    get() = threadState.queuedRuns
+  var queuedRuns by mutableStateOf(emptyList<QueuedRun>())
+    private set
 
   /** Whether the queue is held, so nothing starts it on its own. */
-  val queueIsHeld: Boolean
-    get() = threadState.queueIsHeld
+  var queueIsHeld by mutableStateOf(false)
+    private set
 
   /** The question the agent is waiting on, when it has not been answered yet. */
-  val pendingQuestion: AgentQuestion?
-    get() = threadState.pendingQuestion
+  var pendingQuestion by mutableStateOf<AgentQuestion?>(null)
+    private set
 
   /** The approval the agent is waiting on, when it has not been answered yet. */
-  val pendingApproval: AgentApproval?
-    get() = threadState.pendingApproval
+  var pendingApproval by mutableStateOf<AgentApproval?>(null)
+    private set
 
   /** The requests the app has answered, so a question is not asked twice. */
-  val answeredRequestIds: Set<String>
-    get() = threadState.answeredRequestIds
+  var answeredRequestIds by mutableStateOf(emptySet<String>())
+    private set
 
   /** The words a queued message will run. */
   fun queuedText(run: QueuedRun): String = threadState.queuedText(run)
@@ -206,8 +214,8 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
    * A permission that is waiting changes the mode: a plain send would decline the
    * permission and send the agent somewhere else, so the message steers instead.
    */
-  val sendMode: ComposerDispatch
-    get() = modeFor(alternate = false)
+  var sendMode by mutableStateOf(ComposerDispatch.AUTO)
+    private set
 
   /**
    * The mode a send uses.
@@ -250,7 +258,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         error = failure.message ?: "Could not answer the agent."
       }
     }
-    publishLines()
+    publishThreadState()
     clearNotification()
   }
 
@@ -266,8 +274,13 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         error = failure.message ?: "Could not answer the agent."
       }
     }
-    publishLines()
+    publishThreadState()
     clearNotification()
+  }
+
+  /** Folds the list of subagents away, or opens it again. */
+  fun toggleSubagents() {
+    subagentsCollapsed = !subagentsCollapsed
   }
 
   /** Narrows the list to one project, or back to every project. */
@@ -496,6 +509,14 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     pendingSends.clear()
     lines = emptyList()
     subagents = emptyList()
+    activeRun = null
+    isBusy = false
+    queuedRuns = emptyList()
+    queueIsHeld = false
+    pendingQuestion = null
+    pendingApproval = null
+    answeredRequestIds = emptySet()
+    sendMode = ComposerDispatch.AUTO
     composer = ""
     pendingPhoto = null
     pendingFile = null
@@ -538,7 +559,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
     updateComposer("")
     pendingPhoto = null
     pendingFile = null
-    publishLines()
+    publishThreadState()
     viewModelScope.launch {
       try {
         val session = session ?: throw PeerException("The connection to the server is gone.")
@@ -553,7 +574,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
         )
       } catch (failure: Exception) {
         pendingSends.removeAll { it.messageId == messageId }
-        publishLines()
+        publishThreadState()
         updateComposer(text)
         error = failure.message ?: "Could not send the message."
       }
@@ -959,8 +980,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
       "snapshot" -> {
         val projection = item.optJSONObject("projection") ?: return
         threadState.readSnapshot(projection)
-        publishLines()
-        publishSubagents()
+        publishThreadState()
       }
 
       "event" -> {
@@ -973,8 +993,7 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
           return
         }
         if (!threadState.readEvent(event)) return
-        publishLines()
-        publishSubagents()
+        publishThreadState()
         notifyWhenNeeded()
       }
     }
@@ -985,15 +1004,26 @@ class PeerViewModel(application: Application) : AndroidViewModel(application) {
    * They stay apart from the turn items: a queued message turns into a turn item
    * under its own id, so keeping them together would show it twice.
    */
-  private fun publishLines() {
+  /**
+   * Publishes what the thread holds.
+   *
+   * The screen reads these while it draws, so they have to be state: a plain
+   * getter would leave the old values on the screen when the server changes them.
+   */
+  private fun publishThreadState() {
+    activeRun = threadState.activeRun
+    isBusy = threadState.isBusy
+    queuedRuns = threadState.queuedRuns
+    queueIsHeld = threadState.queueIsHeld
+    pendingQuestion = threadState.pendingQuestion
+    pendingApproval = threadState.pendingApproval
+    answeredRequestIds = threadState.answeredRequestIds
+    sendMode = modeFor(alternate = false)
     val local =
       pendingSends
         .filter { !threadState.hasMessage(it.messageId) }
         .map { it.line }
     lines = threadState.lines + local
-  }
-
-  private fun publishSubagents() {
     subagents = threadState.subagents
   }
 

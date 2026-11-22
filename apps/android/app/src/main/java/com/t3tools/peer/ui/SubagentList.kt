@@ -1,6 +1,7 @@
 package com.t3tools.peer.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,20 +30,40 @@ import com.t3tools.peer.model.SubagentSummary
 /**
  * The other agents working inside this thread. A subagent is not a thread of
  * its own here: it belongs to the thread that started it.
+ *
+ * The list folds away, the way the official app folds its group of subagents,
+ * so a thread with many of them does not push the chat off the screen.
  */
 @Composable
-fun SubagentList(subagents: List<SubagentSummary>) {
+fun SubagentList(
+  subagents: List<SubagentSummary>,
+  collapsed: Boolean = false,
+  onToggle: () -> Unit = {},
+) {
   if (subagents.isEmpty()) return
   val palette = LocalPeerPalette.current
   Column(
     modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 6.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    Text(
-      "Subagents",
-      style = MaterialTheme.typography.labelMedium,
-      color = palette.muted,
-    )
+    Row(
+      modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 2.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        if (collapsed) Icons.Filled.KeyboardArrowRight else Icons.Filled.KeyboardArrowDown,
+        contentDescription = if (collapsed) "Show subagents" else "Hide subagents",
+        tint = palette.muted,
+        modifier = Modifier.size(16.dp),
+      )
+      Spacer(Modifier.width(4.dp))
+      Text(
+        if (subagents.size == 1) "1 subagent" else "${subagents.size} subagents",
+        style = MaterialTheme.typography.labelMedium,
+        color = palette.muted,
+      )
+    }
+    if (collapsed) return
     subagents.forEach { subagent ->
       Column(modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {

@@ -117,7 +117,11 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
       ThreadStatus(
         viewModel = viewModel,
       )
-      SubagentList(viewModel.subagents)
+      SubagentList(
+        subagents = viewModel.subagents,
+        collapsed = viewModel.subagentsCollapsed,
+        onToggle = viewModel::toggleSubagents,
+      )
       LazyColumn(
         state = listState,
         modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -137,7 +141,11 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
             QuestionCard(
               question = question,
               answered = question.requestId in viewModel.answeredRequestIds,
+              draft = viewModel.questionDraft,
+              onDraftChange = { viewModel.updateQuestionDraft(it) },
               onChoose = { option -> viewModel.chooseOption(question, option) },
+              onAnswer = { viewModel.answerQuestion() },
+              onStop = viewModel::stopRun,
             )
           }
           line.approval?.let { approval ->
@@ -151,31 +159,22 @@ fun ThreadScreen(viewModel: PeerViewModel, modifier: Modifier = Modifier) {
       }
       val pendingPhoto = viewModel.pendingPhoto
       val pendingFile = viewModel.pendingFile
-      val question = viewModel.pendingQuestion
-      val approval = viewModel.pendingApproval
-      if (question != null) {
-        Composer(
-          value = viewModel.questionDraft,
-          onValueChange = { viewModel.updateQuestionDraft(it) },
-          onSend = { viewModel.answerQuestion() },
-          placeholder = "Answer the agent",
-          sendEnabled = viewModel.questionDraft.isNotBlank(),
-        )
-      } else {
-        Composer(
-          value = viewModel.composer,
-          onValueChange = { viewModel.updateComposer(it) },
-          onSend = { alternate -> viewModel.send(alternate) },
-          mode = viewModel.sendMode,
-          onStop = viewModel::stopRun,
-          onPickPhoto = { photoPicker.launch(PickVisualMediaRequest()) },
-          onPickFile = { filePicker.launch(arrayOf("*/*")) },
-          pendingPhotoName = pendingPhoto?.name,
-          onClearPhoto = viewModel::clearPendingPhoto,
-          pendingFileName = pendingFile?.name,
-          onClearFile = viewModel::clearPendingFile,
-        )
-      }
+      // The composer is always the user's own. A question the agent asked gets
+      // its own answer box in the card, so a message can still be written and
+      // queued while the agent waits for an answer.
+      Composer(
+        value = viewModel.composer,
+        onValueChange = { viewModel.updateComposer(it) },
+        onSend = { alternate -> viewModel.send(alternate) },
+        mode = viewModel.sendMode,
+        onStop = viewModel::stopRun,
+        onPickPhoto = { photoPicker.launch(PickVisualMediaRequest()) },
+        onPickFile = { filePicker.launch(arrayOf("*/*")) },
+        pendingPhotoName = pendingPhoto?.name,
+        onClearPhoto = viewModel::clearPendingPhoto,
+        pendingFileName = pendingFile?.name,
+        onClearFile = viewModel::clearPendingFile,
+      )
     }
   }
   if (viewModel.branchSheetVisible) {
@@ -256,7 +255,11 @@ private fun AttachmentName(name: String) {
 private fun QuestionCard(
   question: AgentQuestion,
   answered: Boolean,
+  draft: String,
+  onDraftChange: (String) -> Unit,
   onChoose: (AgentQuestionOption) -> Unit,
+  onAnswer: () -> Unit,
+  onStop: (() -> Unit)? = null,
 ) {
   val palette = LocalPeerPalette.current
   Column(
@@ -308,6 +311,56 @@ private fun QuestionCard(
         style = MaterialTheme.typography.labelMedium,
         color = palette.muted,
       )
+    } else {
+      // The answer goes back on the request the question belongs to.
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(palette.grouped)
+            .padding(start = 14.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Box(modifier = Modifier.weight(1f).padding(vertical = 8.dp)) {
+          if (draft.isEmpty()) {
+            Text("Answer the agent", fontSize = 15.sp, color = palette.muted)
+          }
+          BasicTextField(
+            value = draft,
+            onValueChange = onDraftChange,
+            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 15.sp, color = palette.foreground),
+            cursorBrush = SolidColor(palette.primary),
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth(),
+          )
+        }
+        Box(
+          modifier =
+            Modifier
+              .size(34.dp)
+              .clip(CircleShape)
+              .background(if (draft.isBlank()) palette.grouped else palette.primary)
+              .clickable(enabled = draft.isNotBlank(), onClick = onAnswer),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            Icons.AutoMirrored.Filled.Send,
+            contentDescription = "Send the answer",
+            tint = if (draft.isBlank()) palette.muted else palette.onPrimary,
+            modifier = Modifier.size(16.dp),
+          )
+        }
+      }
+      if (onStop != null) {
+        // The agent waits for the answer, so the only way out is to stop it.
+        Text(
+          "Stop the agent",
+          style = MaterialTheme.typography.labelMedium,
+          color = palette.danger,
+          modifier = Modifier.clickable(onClick = onStop).padding(vertical = 2.dp),
+        )
+      }
     }
   }
 }
