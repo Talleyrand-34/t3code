@@ -2,6 +2,8 @@ import { type LiveActivity } from "expo-widgets";
 import {
   configureAndroidAgentNotifications,
   clearAndroidAgentNotifications,
+  deliverAndroidAgentActivity,
+  supportsAndroidAgentNotifications,
 } from "./androidNotifications";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
@@ -203,6 +205,7 @@ export function setAgentAwarenessRelayTokenProvider(
     pushTokenSubscription = null;
     appStateSubscription?.remove();
     appStateSubscription = null;
+    stopAgentActivityPoll();
     if (activeLiveActivityRegistrationRetry) {
       clearTimeout(activeLiveActivityRegistrationRetry);
       activeLiveActivityRegistrationRetry = null;
@@ -218,6 +221,7 @@ export function setAgentAwarenessRelayTokenProvider(
   }
   ensurePushTokenListener();
   ensureAppStateListener();
+  scheduleAgentActivityPoll(true);
   runRegistrationInBackground(
     refreshActiveLiveActivityRemoteRegistration(),
     "active live activity registration after cloud sign-in failed",
@@ -290,6 +294,16 @@ const nativePushTokenRegistration = Effect.fn("remoteRegistration.nativePushToke
             Effect.orElseSucceed(() => false),
           )
         : true);
+    if (Platform.OS === "android") {
+      // Android has no push transport: agent activity arrives over the app's own
+      // connection and is rendered by the native module, so there is no token to read
+      // and no token to register.
+      return {
+        notificationsEnabled: alertsEnabled,
+        pushToken: null,
+        notificationPermissionGranted: permissions.granted,
+      };
+    }
     if (observedPushToken) {
       return {
         notificationsEnabled: alertsEnabled,
@@ -541,7 +555,18 @@ const readAgentActivitySnapshot: () => Effect.Effect<
       return null;
     }
     const client = yield* ManagedRelay.ManagedRelayClient;
-    return yield* client.getAgentActivitySnapshot({ clerkToken: token });
+    const deviceId = yield* Effect.tryPromise({
+      try: () => loadOrCreateAgentAwarenessDeviceId(),
+      catch: (cause) =>
+        new AgentAwarenessOperationError({
+          operation: "load-device-registration-identifier",
+          cause,
+        }),
+    }).pipe(Effect.orElseSucceed(() => null));
+    return yield* client.getAgentActivitySnapshot({
+      clerkToken: token,
+      ...(deviceId ? { deviceId } : {}),
+    });
   },
   Effect.catch((error) =>
     Effect.sync(() => {
@@ -764,14 +789,64 @@ function ensureAppStateListener(): void {
 
   appStateSubscription = AppState.addEventListener("change", (state) => {
     if (state !== "active") {
+      stopAgentActivityPoll();
       return;
     }
+    scheduleAgentActivityPoll(true);
     enqueueDeviceRegistration({}, "device registration after app foreground failed");
     runRegistrationInBackground(
       refreshActiveLiveActivityRemoteRegistration(),
       "active live activity reconciliation after app foreground failed",
     );
   });
+}
+
+/**
+ * How often the app asks the relay for agent activity.
+ *
+ * Android has no push transport, so the app polls while it is in front of the user.
+ * The wait is short while agents are working and long when they are not.
+ */
+const AGENT_ACTIVITY_POLL_ACTIVE_MS = 15_000;
+const AGENT_ACTIVITY_POLL_IDLE_MS = 60_000;
+
+let agentActivityPollTimer: ReturnType<typeof setTimeout> | null = null;
+let agentActivityPollHasActiveWork = false;
+
+const pollAgentActivity = Effect.fn("remoteRegistration.pollAgentActivity")(function* () {
+  const snapshot = yield* readAgentActivitySnapshot();
+  const payload = snapshot?.payload;
+  if (!payload) return;
+  deliverAndroidAgentActivity(payload);
+  agentActivityPollHasActiveWork = payload["active"] === "true";
+});
+
+/** Schedules the next poll. An immediate one asks right away, as the app comes forward. */
+function scheduleAgentActivityPoll(immediate: boolean = false): void {
+  if (agentActivityPollTimer !== null) return;
+  if (!canPollAgentActivity()) return;
+  const wait = immediate
+    ? 0
+    : agentActivityPollHasActiveWork
+      ? AGENT_ACTIVITY_POLL_ACTIVE_MS
+      : AGENT_ACTIVITY_POLL_IDLE_MS;
+  agentActivityPollTimer = setTimeout(() => {
+    agentActivityPollTimer = null;
+    runRegistrationInBackground(pollAgentActivity(), "agent activity poll failed");
+    scheduleAgentActivityPoll();
+  }, wait);
+}
+
+function stopAgentActivityPoll(): void {
+  if (agentActivityPollTimer !== null) {
+    clearTimeout(agentActivityPollTimer);
+    agentActivityPollTimer = null;
+  }
+}
+
+/** Android reads agent activity by polling, because it has no push transport. */
+function canPollAgentActivity(): boolean {
+  return Platform.OS === "android" && supportsAndroidAgentNotifications();
 }
 
 function publishWidget(source: AgentActivityWidgetSource): void {

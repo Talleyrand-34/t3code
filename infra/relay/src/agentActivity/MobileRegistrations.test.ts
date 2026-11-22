@@ -18,16 +18,8 @@ import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
-import * as FcmDeliveries from "./FcmDeliveries.ts";
 
-const layerPublisher = AgentActivityPublisher.layer.pipe(
-  Layer.provide(
-    Layer.succeed(FcmDeliveries.FcmDeliveries, {
-      enqueue: () => Effect.succeed(null),
-      process: () => Effect.void,
-    }),
-  ),
-);
+const layerPublisher = AgentActivityPublisher.layer;
 import * as ApnsDeliveries from "./ApnsDeliveries.ts";
 import * as ApnsClient from "./ApnsClient.ts";
 import * as ApnsProviderTokens from "./ApnsProviderTokens.ts";
@@ -294,5 +286,51 @@ describe("MobileRegistrations", () => {
         expect(queuedJobs).toEqual([]);
       }).pipe(Effect.provide(layerRegistrationReplay({ devices, liveActivities, queuedJobs })));
     },
+  );
+  it.effect("answers the asking device with the payload it renders", () =>
+    Effect.gen(function* () {
+      const registrations = yield* MobileRegistrations.MobileRegistrations;
+
+      const withoutDevice = yield* registrations.getAgentActivitySnapshot({ userId: "dev:julius" });
+      expect(withoutDevice.payload).toBeUndefined();
+
+      const withDevice = yield* registrations.getAgentActivitySnapshot({
+        userId: "dev:julius",
+        deviceId: "device-1",
+      });
+      expect(withDevice.payload?.["t3_kind"]).toBe("agent_activity");
+      expect(withDevice.payload?.["device_id"]).toBe("device-1");
+      expect(withDevice.payload?.["user_id"]).toBe("dev:julius");
+      expect(withDevice.payload?.["activity_active_count"]).toBe("1");
+    }).pipe(
+      Effect.provide(
+        layerRegistrationReplay({
+          devices: makeDevices(),
+          liveActivities: makeLiveActivities({
+            listTargets: () =>
+              Effect.succeed([
+                {
+                  user_id: "dev:julius",
+                  device_id: "device-1",
+                  platform: "android",
+                  ios_major_version: null,
+                  app_version: "1.0.0",
+                  bundle_id: null,
+                  aps_environment: null,
+                  push_token: null,
+                  push_to_start_token: null,
+                  preferences_json: JSON.stringify(device.preferences),
+                  activity_push_token: null,
+                  remote_start_queued_at: null,
+                  remote_started_at: null,
+                  ended_at: null,
+                  last_aggregate_json: null,
+                  last_live_activity_delivery_at: null,
+                },
+              ]),
+          }),
+        }),
+      ),
+    ),
   );
 });

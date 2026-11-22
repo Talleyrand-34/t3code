@@ -4,7 +4,7 @@ const PAIRING_TOKEN_PARAM = "token";
 const HOSTED_PAIRING_HOST_PARAM = "host";
 const HOSTED_PAIRING_LABEL_PARAM = "label";
 const PAIRING_APP_LINK_PARAM = "pairingUrl";
-const APP_LINK_PROTOCOL = /^t3code(?:-[a-z]+)?:$/;
+const APP_LINK_PROTOCOL = /^t3(?:code|peer)(?:-[a-z]+)?:$/;
 const SUPPORTED_REMOTE_BACKEND_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
 
 export const readHashParams = (url: URL): URLSearchParams =>
@@ -187,11 +187,19 @@ export const readHostedPairingRequest = (url: URL): HostedPairingRequest | null 
   };
 };
 
-/** Wraps a pairing URL in the `t3code://pair` link that desktop opens and mobile scans. */
-export const buildPairingAppLink = (pairingUrl: string): string =>
-  `t3code://pair?${new URLSearchParams([[PAIRING_APP_LINK_PARAM, pairingUrl]])}`;
+/**
+ * Wraps a pairing URL in the `t3code://pair` link that desktop opens and mobile scans.
+ * The peer client registers its own scheme, so a device holding both apps still has one
+ * unambiguous link per app.
+ */
+export const buildPairingAppLink = (pairingUrl: string, scheme = "t3code"): string =>
+  `${scheme}://pair?${new URLSearchParams([[PAIRING_APP_LINK_PARAM, pairingUrl]])}`;
 
-/** Reads the pairing URL from a `t3code://pair` link on any app channel scheme. */
+/** The app link that opens the native peer client rather than the full mobile app. */
+export const buildPeerAppLink = (pairingUrl: string): string =>
+  buildPairingAppLink(pairingUrl, "t3peer");
+
+/** Reads the pairing URL from a `t3code://pair` or `t3peer://pair` link on any app channel scheme. */
 export const readPairingAppLink = (value: string): string | null => {
   if (!URL.canParse(value)) return null;
   const url = new URL(value);

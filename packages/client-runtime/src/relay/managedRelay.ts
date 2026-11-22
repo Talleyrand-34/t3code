@@ -316,6 +316,8 @@ export class ManagedRelayClient extends Context.Service<
     }) => Effect.Effect<RelayOkResponse, ManagedRelayClientError>;
     readonly getAgentActivitySnapshot: (input: {
       readonly clerkToken: string;
+      /** The device the payload is for. Without it the snapshot carries no payload. */
+      readonly deviceId?: string | undefined;
     }) => Effect.Effect<RelayAgentActivitySnapshotResponse, ManagedRelayClientError>;
     readonly resetTokenCache: Effect.Effect<void>;
   }
@@ -500,9 +502,9 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
       method: RelayUnregisterDeviceEndpoint.method,
       url: urlBuilder.mobile.unregisterDevice({ params: { deviceId } }),
     }),
-    getAgentActivitySnapshot: (): DpopProofTarget => ({
+    getAgentActivitySnapshot: (deviceId?: string): DpopProofTarget => ({
       method: RelayAgentActivitySnapshotEndpoint.method,
-      url: urlBuilder.mobile.getAgentActivitySnapshot(),
+      url: urlBuilder.mobile.getAgentActivitySnapshot({ params: { deviceId } }),
     }),
     registerLiveActivity: (): DpopProofTarget => ({
       method: RelayRegisterLiveActivityEndpoint.method,
@@ -954,12 +956,13 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
         return yield* mobileRegistrationRequest(
           {
             clerkToken: input.clerkToken,
-            target: dpopProofTargets.getAgentActivitySnapshot(),
+            target: dpopProofTargets.getAgentActivitySnapshot(input.deviceId),
           },
           (authorization) =>
             client.mobile
               .getAgentActivitySnapshot({
                 headers: dpopHeaders(authorization),
+                params: { deviceId: input.deviceId },
               })
               .pipe(
                 Effect.mapError(relayRequestError("read relay agent activity snapshot")),

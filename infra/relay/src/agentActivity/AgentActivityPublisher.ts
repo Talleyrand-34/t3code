@@ -20,10 +20,8 @@ import * as AgentActivityRows from "./AgentActivityRows.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as ApnsDeliveries from "./ApnsDeliveries.ts";
-import * as FcmDeliveries from "./FcmDeliveries.ts";
 
 export type AgentActivityPublishError =
-  | FcmDeliveries.FcmDeliveryError
   | AgentActivityRows.AgentActivityRowUpsertPersistenceError
   | AgentActivityRows.AgentActivityRowDeletePersistenceError
   | AgentActivityRows.AgentActivityRowListPersistenceError
@@ -56,7 +54,6 @@ const make = Effect.gen(function* () {
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const liveActivities = yield* LiveActivities.LiveActivities;
   const apnsDeliveries = yield* ApnsDeliveries.ApnsDeliveries;
-  const fcmDeliveries = yield* FcmDeliveries.FcmDeliveries;
 
   const publishForDeliveryUser = Effect.fnUntraced(function* (input: {
     readonly deliveryUser: EnvironmentLinks.AgentAwarenessDeliveryUserRecord;
@@ -88,7 +85,8 @@ const make = Effect.gen(function* () {
       targets,
       Effect.fnUntraced(function* (target) {
         if (target.platform === "android") {
-          return [yield* fcmDeliveries.enqueue({ target, state: input.state })];
+          // Android has no push transport. The app asks for its activity when it polls.
+          return [];
         }
         return yield* Effect.all(
           [
@@ -132,7 +130,8 @@ const make = Effect.gen(function* () {
         return null;
       }
       if (target.platform === "android") {
-        return yield* fcmDeliveries.enqueue({ target, state: null, replay: true });
+        // Android reads its activity by polling, so there is nothing to replay to.
+        return null;
       }
       const now = yield* DateTime.now;
       const aggregate = makeAggregateState({

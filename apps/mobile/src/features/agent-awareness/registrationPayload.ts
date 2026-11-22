@@ -32,8 +32,7 @@ export function makeRelayDeviceRegistrationRequest(
   const liveActivitiesEnabled =
     pushAvailable &&
     input.preferences.liveActivitiesEnabled !== false &&
-    (input.platform !== "android" ||
-      (input.notificationPermissionGranted && Boolean(input.pushToken)));
+    (input.platform !== "android" || input.notificationPermissionGranted);
   return {
     deviceId: input.deviceId,
     label: input.label,

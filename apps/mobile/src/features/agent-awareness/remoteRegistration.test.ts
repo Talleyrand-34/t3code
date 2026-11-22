@@ -687,13 +687,9 @@ describe("makeRelayDeviceRegistrationRequest", () => {
           preferences: { notificationsEnabled: false, liveActivitiesEnabled: os === "ios" },
         });
         if (os === "android") {
-          expect(registrations.at(-1)).toMatchObject({ pushToken: "rotated" });
-          vi.mocked(Notifications.getPermissionsAsync).mockResolvedValueOnce({
-            granted: false,
-          } as Awaited<ReturnType<typeof Notifications.getPermissionsAsync>>);
-          yield* refreshAgentAwarenessRegistration();
+          // Android has no push transport, so no token is ever read or rotated.
+          expect(registrations.at(-1)).not.toHaveProperty("pushToken");
           expect(registrations.at(-1)).toMatchObject({
-            pushToken: "initial",
             preferences: { notificationsEnabled: false, liveActivitiesEnabled: false },
           });
         } else {
@@ -710,15 +706,11 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     },
   );
   it.effect.each(["blocked", "unavailable"] as const)(
-    "keeps Android push delivery registered when the alert channel is %s",
+    "keeps Android agent activity registered when the alert channel is %s",
     (channelState) => {
       vi.mocked(loadPreferences).mockResolvedValue({ liveActivitiesEnabled: true });
       vi.spyOn(Platform, "OS", "get").mockReturnValue("android");
       vi.spyOn(Platform, "Version", "get").mockReturnValue(36);
-      vi.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue({
-        type: "android",
-        data: "fcm-token",
-      });
       vi.mocked(Notifications.getNotificationChannelAsync).mockResolvedValue({
         id: "agent-alerts",
         name: "Agent alerts",
@@ -748,24 +740,16 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk"), "user-a");
       return Effect.gen(function* () {
         yield* runBackgroundOperations();
+        // Android has no push transport, so the registration carries no push token.
         expect(registrations.at(-1)).toMatchObject({
-          pushToken: "fcm-token",
           preferences: { notificationsEnabled: false, liveActivitiesEnabled: true },
         });
+        expect(registrations.at(-1)).not.toHaveProperty("pushToken");
         expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
-
-        const listener = vi.mocked(Notifications.addPushTokenListener).mock.calls.at(-1)![0];
-        listener({ type: "android", data: "rotated-fcm-token" });
-        yield* runBackgroundOperations();
-        expect(registrations.at(-1)).toMatchObject({
-          pushToken: "rotated-fcm-token",
-          preferences: { notificationsEnabled: false, liveActivitiesEnabled: true },
-        });
 
         vi.mocked(Notifications.getNotificationChannelAsync).mockResolvedValue(null);
         yield* refreshAgentAwarenessRegistration();
         expect(registrations.at(-1)).toMatchObject({
-          pushToken: "fcm-token",
           preferences: { notificationsEnabled: true },
         });
       }).pipe(

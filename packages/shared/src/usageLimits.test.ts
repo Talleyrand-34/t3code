@@ -132,6 +132,11 @@ describe("new thread model fallback", () => {
     ["antigravity", ["gemini-weekly"], "antigravity-default", true],
     ["opencode", ["go_weekly"], "opencode/big-pickle", false],
     ["opencode", ["go_weekly"], "opencode-go/big-pickle", true],
+    ["opencode", ["minimax_weekly"], "minimax/MiniMax-M3.1-Flash", true],
+    ["opencode", ["minimax-coding-plan_weekly"], "minimax/MiniMax-M3.1-Flash", false],
+    ["opencode", ["minimax-coding-plan_weekly"], "minimax-coding-plan/MiniMax-M3", true],
+    ["opencode", ["minimax-coding-plan_weekly"], "opencode-go/big-pickle", false],
+    ["opencode", ["go_weekly"], "minimax/MiniMax-M3.1-Flash", false],
   ] as const)("matches %s pools %s to %s", (driver, ids, model, usesFallback) => {
     const defaultSelection = { ...selection, model };
     expect(

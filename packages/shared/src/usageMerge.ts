@@ -28,6 +28,8 @@ export interface ProviderTotals {
 export interface ModelTotals {
   readonly model: string;
   readonly provider: UsageProviderKind;
+  /** The upstream integration that served the model, when the harness knows it. */
+  readonly upstreamProvider?: string;
   readonly costUsd: number;
   readonly totalTokens: number;
   readonly tokens: UsageTokenTotals;
@@ -131,7 +133,26 @@ function bucketsForSource(summary: UsageSummary, source: UsageSource): readonly 
 }
 
 function bucketKey(bucket: UsageBucket): string {
-  return JSON.stringify([bucket.day, bucket.hourStart ?? null, bucket.provider, bucket.model]);
+  return JSON.stringify([
+    bucket.day,
+    bucket.hourStart ?? null,
+    bucket.provider,
+    bucket.upstreamProvider ?? null,
+    bucket.model,
+  ]);
+}
+
+/**
+ * A model's identity: the harness that ran it, the upstream that served it and
+ * the model itself. One shape, so every layer that groups models by identity
+ * groups them the same way.
+ */
+export function usageModelKey(model: {
+  readonly provider: string;
+  readonly upstreamProvider?: string | undefined;
+  readonly model: string;
+}): string {
+  return JSON.stringify([model.provider, model.upstreamProvider ?? null, model.model]);
 }
 
 function claimSources(environments: readonly EnvironmentUsage[]): {
@@ -353,6 +374,8 @@ export function mergeUsage(
     string,
     {
       provider: UsageProviderKind;
+      upstreamProvider?: string;
+      model: string;
       costUsd: number;
       totalTokens: number;
       tokens: UsageTokenTotals;
@@ -437,9 +460,11 @@ export function mergeUsage(
       provider.records += bucket.records;
       providerAccumulator.set(bucket.provider, provider);
 
-      const modelKey = `${bucket.provider} ${bucket.model}`;
+      const modelKey = usageModelKey(bucket);
       const model = modelAccumulator.get(modelKey) ?? {
         provider: bucket.provider,
+        ...(bucket.upstreamProvider ? { upstreamProvider: bucket.upstreamProvider } : {}),
+        model: bucket.model,
         costUsd: 0,
         totalTokens: 0,
         tokens: {
@@ -519,9 +544,10 @@ export function mergeUsage(
     .sort((a, b) => b.costUsd - a.costUsd);
 
   const models: ModelTotals[] = [...modelAccumulator.entries()]
-    .map(([key, totals]) => ({
-      model: key.slice(key.indexOf(" ") + 1),
+    .map(([, totals]) => ({
+      model: totals.model,
       provider: totals.provider,
+      ...(totals.upstreamProvider ? { upstreamProvider: totals.upstreamProvider } : {}),
       costUsd: totals.costUsd,
       totalTokens: totals.totalTokens,
       tokens: totals.tokens,

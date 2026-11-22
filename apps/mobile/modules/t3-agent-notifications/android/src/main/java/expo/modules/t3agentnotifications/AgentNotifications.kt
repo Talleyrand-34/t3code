@@ -15,18 +15,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
-import com.google.firebase.messaging.RemoteMessage
-import expo.modules.notifications.service.ExpoFirebaseMessagingService
-
-class AgentMessagingService : ExpoFirebaseMessagingService() {
-  override fun onMessageReceived(remoteMessage: RemoteMessage) {
-    if (remoteMessage.data["t3_kind"] == "agent_activity") {
-      AgentNotifications.receive(this, remoteMessage.data)
-    } else {
-      super.onMessageReceived(remoteMessage)
-    }
-  }
-}
 
 class AgentActivityDismissReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {

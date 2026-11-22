@@ -1,0 +1,760 @@
+diff --git a/android/build.gradle b/android/build.gradle
+index 4e5fc41796cf6cc51cc37dd5a5f08c86d310c196..d98229b626bf56d7593c2544b24cbd0ef5f907cc 100644
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -40,7 +40,6 @@ dependencies {
+   implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+ 
+   // release notes in https://firebase.google.com/support/release-notes/android - cmd + f "Cloud Messaging version"
+-  implementation 'com.google.firebase:firebase-messaging:25.0.1'
+ 
+   implementation 'me.leolin:ShortcutBadger:1.1.22@aar'
+ 
+diff --git a/android/src/main/AndroidManifest.xml b/android/src/main/AndroidManifest.xml
+index 777403d2c1ce4d4e5b10b1988fac1166274cec99..570b9daa5a3484d0c5b09ff2b70d090caf6be67f 100644
+--- a/android/src/main/AndroidManifest.xml
++++ b/android/src/main/AndroidManifest.xml
+@@ -3,14 +3,6 @@
+   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+ 
+   <application>
+-    <service
+-      android:name=".service.ExpoFirebaseMessagingService"
+-      android:exported="false">
+-      <intent-filter android:priority="-1">
+-        <action android:name="com.google.firebase.MESSAGING_EVENT" />
+-      </intent-filter>
+-    </service>
+-
+     <receiver
+       android:name=".service.NotificationsService"
+       android:enabled="true"
+diff --git a/android/src/main/java/expo/modules/notifications/notifications/NotificationSerializer.java b/android/src/main/java/expo/modules/notifications/notifications/NotificationSerializer.java
+index 84f5af4f2f28b69d0240129ff50746bd5e11fae1..0f0227bbb09b545ca8f8fda05fb2614a7c451b3d 100644
+--- a/android/src/main/java/expo/modules/notifications/notifications/NotificationSerializer.java
++++ b/android/src/main/java/expo/modules/notifications/notifications/NotificationSerializer.java
+@@ -10,7 +10,7 @@ import expo.modules.notifications.service.NotificationsService;
+ 
+ import androidx.annotation.Nullable;
+ 
+-import com.google.firebase.messaging.RemoteMessage;
++import expo.modules.notifications.notifications.model.RemoteMessage;
+ 
+ import org.jetbrains.annotations.NotNull;
+ import org.json.JSONArray;
+diff --git a/android/src/main/java/expo/modules/notifications/notifications/RemoteMessageSerializer.java b/android/src/main/java/expo/modules/notifications/notifications/RemoteMessageSerializer.java
+index 1dcea24882679652f2e0178d0ece066e70c60619..0dfb1b83f84fd686d1b89af051a079c93519b512 100644
+--- a/android/src/main/java/expo/modules/notifications/notifications/RemoteMessageSerializer.java
++++ b/android/src/main/java/expo/modules/notifications/notifications/RemoteMessageSerializer.java
+@@ -2,7 +2,7 @@ package expo.modules.notifications.notifications;
+ 
+ import android.os.Bundle;
+ 
+-import com.google.firebase.messaging.RemoteMessage;
++import expo.modules.notifications.notifications.model.RemoteMessage;
+ 
+ import java.util.Map;
+ 
+diff --git a/android/src/main/java/expo/modules/notifications/notifications/debug/DebugLogging.kt b/android/src/main/java/expo/modules/notifications/notifications/debug/DebugLogging.kt
+index ea19b979bd20e53f668c8f9081c9d47ce50ed69d..3ab6561ad4205f6cfd2ef1b053eb5495c71c70c4 100644
+--- a/android/src/main/java/expo/modules/notifications/notifications/debug/DebugLogging.kt
++++ b/android/src/main/java/expo/modules/notifications/notifications/debug/DebugLogging.kt
+@@ -4,7 +4,7 @@ import android.os.Build
+ import android.os.Bundle
+ import android.util.Log
+ import androidx.annotation.RequiresApi
+-import com.google.firebase.messaging.RemoteMessage
++import expo.modules.notifications.notifications.model.RemoteMessage
+ import expo.modules.notifications.BuildConfig
+ import expo.modules.notifications.notifications.model.Notification
+ import java.util.function.Consumer
+diff --git a/android/src/main/java/expo/modules/notifications/notifications/model/RemoteMessage.java b/android/src/main/java/expo/modules/notifications/notifications/model/RemoteMessage.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..4bd7f8f488d7b3643f4eee5305de37cac6b2e362
+--- /dev/null
++++ b/android/src/main/java/expo/modules/notifications/notifications/model/RemoteMessage.java
+@@ -0,0 +1,513 @@
++package expo.modules.notifications.notifications.model;
++
++import android.net.Uri;
++import android.os.Bundle;
++import android.os.Parcel;
++import android.os.Parcelable;
++
++import java.util.HashMap;
++import java.util.Map;
++
++import androidx.annotation.NonNull;
++import androidx.annotation.Nullable;
++
++/**
++ * A remote push message.
++ *
++ * This is a local stand-in for the Firebase Messaging {@code RemoteMessage} type. The
++ * Firebase Cloud Messaging transport is not part of this build, so nothing constructs a
++ * remote message from the network any more; the type stays because the notification
++ * pipeline still models a message that arrived from a push service.
++ */
++public class RemoteMessage implements Parcelable {
++  public static final int PRIORITY_UNSPECIFIED = -1;
++  public static final int PRIORITY_MIN = 1;
++  public static final int PRIORITY_LOW = 2;
++  public static final int PRIORITY_NORMAL = 3;
++  public static final int PRIORITY_HIGH = 4;
++  public static final int PRIORITY_MAX = 5;
++
++  private final Map<String, String> data;
++  private final Notification notification;
++  private final String messageId;
++  private final long sentTime;
++  private final int priority;
++  private final int originalPriority;
++  private final String collapseKey;
++  private final String from;
++  private final String messageType;
++  private final String to;
++  private final int ttl;
++
++  public RemoteMessage(
++    @Nullable Map<String, String> data,
++    @Nullable Notification notification,
++    @Nullable String messageId,
++    long sentTime,
++    int priority,
++    int originalPriority,
++    @Nullable String collapseKey,
++    @Nullable String from,
++    @Nullable String messageType,
++    @Nullable String to,
++    int ttl
++  ) {
++    this.data = data == null ? new HashMap<>() : data;
++    this.notification = notification;
++    this.messageId = messageId;
++    this.sentTime = sentTime;
++    this.priority = priority;
++    this.originalPriority = originalPriority;
++    this.collapseKey = collapseKey;
++    this.from = from;
++    this.messageType = messageType;
++    this.to = to;
++    this.ttl = ttl;
++  }
++
++  @NonNull
++  public Map<String, String> getData() {
++    return data;
++  }
++
++  @Nullable
++  public Notification getNotification() {
++    return notification;
++  }
++
++  @Nullable
++  public String getMessageId() {
++    return messageId;
++  }
++
++  public long getSentTime() {
++    return sentTime;
++  }
++
++  public int getPriority() {
++    return priority;
++  }
++
++  public int getOriginalPriority() {
++    return originalPriority;
++  }
++
++  @Nullable
++  public String getCollapseKey() {
++    return collapseKey;
++  }
++
++  @Nullable
++  public String getFrom() {
++    return from;
++  }
++
++  @Nullable
++  public String getMessageType() {
++    return messageType;
++  }
++
++  @Nullable
++  public String getTo() {
++    return to;
++  }
++
++  public int getTtl() {
++    return ttl;
++  }
++
++  @Override
++  public int describeContents() {
++    return 0;
++  }
++
++  @Override
++  public void writeToParcel(Parcel dest, int flags) {
++    dest.writeBundle(toBundle());
++  }
++
++  protected Bundle toBundle() {
++    Bundle bundle = new Bundle();
++    bundle.putBundle("data", toBundle(data));
++    bundle.putBundle("notification", notification == null ? null : notification.toBundle());
++    bundle.putString("messageId", messageId);
++    bundle.putLong("sentTime", sentTime);
++    bundle.putInt("priority", priority);
++    bundle.putInt("originalPriority", originalPriority);
++    bundle.putString("collapseKey", collapseKey);
++    bundle.putString("from", from);
++    bundle.putString("messageType", messageType);
++    bundle.putString("to", to);
++    bundle.putInt("ttl", ttl);
++    return bundle;
++  }
++
++  protected static Bundle toBundle(Map<String, String> data) {
++    Bundle serializedData = new Bundle();
++    for (Map.Entry<String, String> dataEntry : data.entrySet()) {
++      serializedData.putString(dataEntry.getKey(), dataEntry.getValue());
++    }
++    serializedData.putString("dataString", data.getOrDefault("body", null));
++    return serializedData;
++  }
++
++  public static final Creator<RemoteMessage> CREATOR = new Creator<RemoteMessage>() {
++    @Override
++    public RemoteMessage createFromParcel(Parcel in) {
++      Bundle bundle = in.readBundle(RemoteMessage.class.getClassLoader());
++      if (bundle == null) {
++        return new RemoteMessage(null, null, null, 0L, PRIORITY_UNSPECIFIED, PRIORITY_UNSPECIFIED, null, null, null, null, 0);
++      }
++      Bundle dataBundle = bundle.getBundle("data");
++      Map<String, String> data = new HashMap<>();
++      if (dataBundle != null) {
++        for (String key : dataBundle.keySet()) {
++          String value = dataBundle.getString(key);
++          if (value != null) {
++            data.put(key, value);
++          }
++        }
++      }
++      Notification notification = Notification.fromBundle(bundle.getBundle("notification"));
++      return new RemoteMessage(
++        data,
++        notification,
++        bundle.getString("messageId"),
++        bundle.getLong("sentTime"),
++        bundle.getInt("priority"),
++        bundle.getInt("originalPriority"),
++        bundle.getString("collapseKey"),
++        bundle.getString("from"),
++        bundle.getString("messageType"),
++        bundle.getString("to"),
++        bundle.getInt("ttl")
++      );
++    }
++
++    @Override
++    public RemoteMessage[] newArray(int size) {
++      return new RemoteMessage[size];
++    }
++  };
++
++  /**
++   * The notification payload of a remote message.
++   */
++  public static class Notification implements Parcelable {
++    @Nullable private final String body;
++    @Nullable private final String title;
++    @Nullable private final String sound;
++    @Nullable private final String color;
++    @Nullable private final String channelId;
++    @Nullable private final String icon;
++    @Nullable private final String tag;
++    @Nullable private final String ticker;
++    @Nullable private final String clickAction;
++    @Nullable private final String link;
++    @Nullable private final Uri imageUrl;
++    @Nullable private final Long eventTime;
++    @Nullable private final Integer notificationCount;
++    @Nullable private final Integer notificationPriority;
++    @Nullable private final Integer visibility;
++    @Nullable private final long[] vibrateTimings;
++    @Nullable private final int[] lightSettings;
++    @Nullable private final String[] bodyLocalizationArgs;
++    @Nullable private final String[] titleLocalizationArgs;
++    @Nullable private final String bodyLocalizationKey;
++    @Nullable private final String titleLocalizationKey;
++    private final boolean defaultLightSettings;
++    private final boolean defaultSound;
++    private final boolean defaultVibrateSettings;
++    private final boolean localOnly;
++    private final boolean sticky;
++    private final boolean usesDefaultLightSettings;
++
++    public Notification(
++      @Nullable String body,
++      @Nullable String title,
++      @Nullable String sound,
++      @Nullable String color,
++      @Nullable String channelId,
++      @Nullable String icon,
++      @Nullable String tag,
++      @Nullable String ticker,
++      @Nullable String clickAction,
++      @Nullable String link,
++      @Nullable Uri imageUrl,
++      @Nullable Long eventTime,
++      @Nullable Integer notificationCount,
++      @Nullable Integer notificationPriority,
++      @Nullable Integer visibility,
++      @Nullable long[] vibrateTimings,
++      @Nullable int[] lightSettings,
++      @Nullable String[] bodyLocalizationArgs,
++      @Nullable String[] titleLocalizationArgs,
++      @Nullable String bodyLocalizationKey,
++      @Nullable String titleLocalizationKey,
++      boolean defaultLightSettings,
++      boolean defaultSound,
++      boolean defaultVibrateSettings,
++      boolean localOnly,
++      boolean sticky
++    ) {
++      this.body = body;
++      this.title = title;
++      this.sound = sound;
++      this.color = color;
++      this.channelId = channelId;
++      this.icon = icon;
++      this.tag = tag;
++      this.ticker = ticker;
++      this.clickAction = clickAction;
++      this.link = link;
++      this.imageUrl = imageUrl;
++      this.eventTime = eventTime;
++      this.notificationCount = notificationCount;
++      this.notificationPriority = notificationPriority;
++      this.visibility = visibility;
++      this.vibrateTimings = vibrateTimings;
++      this.lightSettings = lightSettings;
++      this.bodyLocalizationArgs = bodyLocalizationArgs;
++      this.titleLocalizationArgs = titleLocalizationArgs;
++      this.bodyLocalizationKey = bodyLocalizationKey;
++      this.titleLocalizationKey = titleLocalizationKey;
++      this.defaultLightSettings = defaultLightSettings;
++      this.defaultSound = defaultSound;
++      this.defaultVibrateSettings = defaultVibrateSettings;
++      this.localOnly = localOnly;
++      this.sticky = sticky;
++      this.usesDefaultLightSettings = defaultLightSettings;
++    }
++
++    @Nullable
++    public String getBody() {
++      return body;
++    }
++
++    @Nullable
++    public String getTitle() {
++      return title;
++    }
++
++    @Nullable
++    public String getSound() {
++      return sound;
++    }
++
++    @Nullable
++    public String getColor() {
++      return color;
++    }
++
++    @Nullable
++    public String getChannelId() {
++      return channelId;
++    }
++
++    @Nullable
++    public String getIcon() {
++      return icon;
++    }
++
++    @Nullable
++    public String getTag() {
++      return tag;
++    }
++
++    @Nullable
++    public String getTicker() {
++      return ticker;
++    }
++
++    @Nullable
++    public String getClickAction() {
++      return clickAction;
++    }
++
++    @Nullable
++    public String getLink() {
++      return link;
++    }
++
++    @Nullable
++    public Uri getImageUrl() {
++      return imageUrl;
++    }
++
++    @Nullable
++    public Long getEventTime() {
++      return eventTime;
++    }
++
++    @Nullable
++    public Integer getNotificationCount() {
++      return notificationCount;
++    }
++
++    @Nullable
++    public Integer getNotificationPriority() {
++      return notificationPriority;
++    }
++
++    @Nullable
++    public Integer getVisibility() {
++      return visibility;
++    }
++
++    @Nullable
++    public long[] getVibrateTimings() {
++      return vibrateTimings;
++    }
++
++    @Nullable
++    public int[] getLightSettings() {
++      return lightSettings;
++    }
++
++    @Nullable
++    public String[] getBodyLocalizationArgs() {
++      return bodyLocalizationArgs;
++    }
++
++    @Nullable
++    public String[] getTitleLocalizationArgs() {
++      return titleLocalizationArgs;
++    }
++
++    @Nullable
++    public String getBodyLocalizationKey() {
++      return bodyLocalizationKey;
++    }
++
++    @Nullable
++    public String getTitleLocalizationKey() {
++      return titleLocalizationKey;
++    }
++
++    public boolean getDefaultLightSettings() {
++      return defaultLightSettings;
++    }
++
++    public boolean getDefaultSound() {
++      return defaultSound;
++    }
++
++    public boolean getDefaultVibrateSettings() {
++      return defaultVibrateSettings;
++    }
++
++    public boolean getLocalOnly() {
++      return localOnly;
++    }
++
++    public boolean getSticky() {
++      return sticky;
++    }
++
++    public boolean getUsesDefaultLightSettings() {
++      return usesDefaultLightSettings;
++    }
++
++    @Override
++    public int describeContents() {
++      return 0;
++    }
++
++    @Override
++    public void writeToParcel(Parcel dest, int flags) {
++      dest.writeBundle(toBundle());
++    }
++
++    Bundle toBundle() {
++      Bundle bundle = new Bundle();
++      bundle.putString("body", body);
++      bundle.putString("title", title);
++      bundle.putString("sound", sound);
++      bundle.putString("color", color);
++      bundle.putString("channelId", channelId);
++      bundle.putString("icon", icon);
++      bundle.putString("tag", tag);
++      bundle.putString("ticker", ticker);
++      bundle.putString("clickAction", clickAction);
++      bundle.putString("link", link);
++      bundle.putString("imageUrl", imageUrl == null ? null : imageUrl.toString());
++      if (eventTime != null) {
++        bundle.putLong("eventTime", eventTime);
++      }
++      if (notificationCount != null) {
++        bundle.putInt("notificationCount", notificationCount);
++      }
++      if (notificationPriority != null) {
++        bundle.putInt("notificationPriority", notificationPriority);
++      }
++      if (visibility != null) {
++        bundle.putInt("visibility", visibility);
++      }
++      bundle.putLongArray("vibrateTimings", vibrateTimings);
++      bundle.putIntArray("lightSettings", lightSettings);
++      bundle.putStringArray("bodyLocalizationArgs", bodyLocalizationArgs);
++      bundle.putStringArray("titleLocalizationArgs", titleLocalizationArgs);
++      bundle.putString("bodyLocalizationKey", bodyLocalizationKey);
++      bundle.putString("titleLocalizationKey", titleLocalizationKey);
++      bundle.putBoolean("defaultLightSettings", defaultLightSettings);
++      bundle.putBoolean("defaultSound", defaultSound);
++      bundle.putBoolean("defaultVibrateSettings", defaultVibrateSettings);
++      bundle.putBoolean("localOnly", localOnly);
++      bundle.putBoolean("sticky", sticky);
++      bundle.putBoolean("usesDefaultLightSettings", usesDefaultLightSettings);
++      return bundle;
++    }
++
++    static Notification fromBundle(@Nullable Bundle bundle) {
++      if (bundle == null) {
++        return null;
++      }
++      Uri imageUrl = null;
++      String imageUrlString = bundle.getString("imageUrl");
++      if (imageUrlString != null) {
++        imageUrl = Uri.parse(imageUrlString);
++      }
++      return new Notification(
++        bundle.getString("body"),
++        bundle.getString("title"),
++        bundle.getString("sound"),
++        bundle.getString("color"),
++        bundle.getString("channelId"),
++        bundle.getString("icon"),
++        bundle.getString("tag"),
++        bundle.getString("ticker"),
++        bundle.getString("clickAction"),
++        bundle.getString("link"),
++        imageUrl,
++        bundle.containsKey("eventTime") ? bundle.getLong("eventTime") : null,
++        bundle.containsKey("notificationCount") ? bundle.getInt("notificationCount") : null,
++        bundle.containsKey("notificationPriority") ? bundle.getInt("notificationPriority") : null,
++        bundle.containsKey("visibility") ? bundle.getInt("visibility") : null,
++        bundle.getLongArray("vibrateTimings"),
++        bundle.getIntArray("lightSettings"),
++        bundle.getStringArray("bodyLocalizationArgs"),
++        bundle.getStringArray("titleLocalizationArgs"),
++        bundle.getString("bodyLocalizationKey"),
++        bundle.getString("titleLocalizationKey"),
++        bundle.getBoolean("defaultLightSettings"),
++        bundle.getBoolean("defaultSound"),
++        bundle.getBoolean("defaultVibrateSettings"),
++        bundle.getBoolean("localOnly"),
++        bundle.getBoolean("sticky")
++      );
++    }
++
++    public static final Creator<Notification> CREATOR = new Creator<Notification>() {
++      @Override
++      public Notification createFromParcel(Parcel in) {
++        Bundle bundle = in.readBundle(Notification.class.getClassLoader());
++        return fromBundle(bundle);
++      }
++
++      @Override
++      public Notification[] newArray(int size) {
++        return new Notification[size];
++      }
++    };
++  }
++}
+diff --git a/android/src/main/java/expo/modules/notifications/notifications/model/RemoteNotificationContent.kt b/android/src/main/java/expo/modules/notifications/notifications/model/RemoteNotificationContent.kt
+index cc9e5592b63e83dcdc7307c7d44f87c76e0db136..a9af566e51de83d4e6fdf0904b6a94cee11a5359 100644
+--- a/android/src/main/java/expo/modules/notifications/notifications/model/RemoteNotificationContent.kt
++++ b/android/src/main/java/expo/modules/notifications/notifications/model/RemoteNotificationContent.kt
+@@ -4,7 +4,7 @@ import android.content.Context
+ import android.graphics.Bitmap
+ import android.os.Parcel
+ import android.os.Parcelable
+-import com.google.firebase.messaging.RemoteMessage
++import expo.modules.notifications.notifications.model.RemoteMessage
+ import expo.modules.notifications.notifications.enums.NotificationPriority
+ import expo.modules.notifications.notifications.interfaces.INotificationContent
+ import expo.modules.notifications.notifications.presentation.builders.downloadImage
+diff --git a/android/src/main/java/expo/modules/notifications/notifications/model/triggers/FirebaseNotificationTrigger.kt b/android/src/main/java/expo/modules/notifications/notifications/model/triggers/FirebaseNotificationTrigger.kt
+index d972ff9085fa4288669d6f678ed3d64791d08bf7..441234db6646dab6eaa044897ec3f881b9594378 100644
+--- a/android/src/main/java/expo/modules/notifications/notifications/model/triggers/FirebaseNotificationTrigger.kt
++++ b/android/src/main/java/expo/modules/notifications/notifications/model/triggers/FirebaseNotificationTrigger.kt
+@@ -6,7 +6,7 @@ import android.os.Parcel
+ import android.os.Parcelable
+ import androidx.annotation.RequiresApi
+ import androidx.core.os.bundleOf
+-import com.google.firebase.messaging.RemoteMessage
++import expo.modules.notifications.notifications.model.RemoteMessage
+ import expo.modules.notifications.notifications.RemoteMessageSerializer
+ import expo.modules.notifications.notifications.interfaces.NotificationTrigger
+ 
+diff --git a/android/src/main/java/expo/modules/notifications/service/ExpoFirebaseMessagingService.kt b/android/src/main/java/expo/modules/notifications/service/ExpoFirebaseMessagingService.kt
+deleted file mode 100644
+index f175435a20dd97631556fc6eb08fadf9654269aa..0000000000000000000000000000000000000000
+diff --git a/android/src/main/java/expo/modules/notifications/service/delegates/FirebaseMessagingDelegate.kt b/android/src/main/java/expo/modules/notifications/service/delegates/FirebaseMessagingDelegate.kt
+index eecdae82e99d2997687e3f3e199c94c3aeffbfe0..47285f88ae99b8357b1a36d72d2d5c5f92e99798 100644
+--- a/android/src/main/java/expo/modules/notifications/service/delegates/FirebaseMessagingDelegate.kt
++++ b/android/src/main/java/expo/modules/notifications/service/delegates/FirebaseMessagingDelegate.kt
+@@ -2,7 +2,7 @@ package expo.modules.notifications.service.delegates
+ 
+ import android.content.Context
+ import android.os.Bundle
+-import com.google.firebase.messaging.RemoteMessage
++import expo.modules.notifications.notifications.model.RemoteMessage
+ import expo.modules.interfaces.taskManager.TaskServiceProviderHelper
+ import expo.modules.notifications.notifications.RemoteMessageSerializer
+ import expo.modules.notifications.notifications.background.BackgroundRemoteNotificationTaskConsumer
+diff --git a/android/src/main/java/expo/modules/notifications/service/interfaces/FirebaseMessagingDelegate.kt b/android/src/main/java/expo/modules/notifications/service/interfaces/FirebaseMessagingDelegate.kt
+index 124e188fb86bef3c87958d0c106fe8d2047a6a36..35d1fb9bec90505b45be3abafa90e936ebc01fbf 100644
+--- a/android/src/main/java/expo/modules/notifications/service/interfaces/FirebaseMessagingDelegate.kt
++++ b/android/src/main/java/expo/modules/notifications/service/interfaces/FirebaseMessagingDelegate.kt
+@@ -1,6 +1,6 @@
+ package expo.modules.notifications.service.interfaces
+ 
+-import com.google.firebase.messaging.RemoteMessage
++import expo.modules.notifications.notifications.model.RemoteMessage
+ import expo.modules.notifications.service.NotificationsService
+ 
+ /**
+diff --git a/android/src/main/java/expo/modules/notifications/tokens/PushTokenModule.kt b/android/src/main/java/expo/modules/notifications/tokens/PushTokenModule.kt
+index d6efb87207da288e2a2a9b5835483d6763c6e272..8c609c7615aef29830bb8c3b17639afbe29ff260 100644
+--- a/android/src/main/java/expo/modules/notifications/tokens/PushTokenModule.kt
++++ b/android/src/main/java/expo/modules/notifications/tokens/PushTokenModule.kt
+@@ -1,6 +1,5 @@
+ package expo.modules.notifications.tokens
+ 
+-import com.google.firebase.messaging.FirebaseMessaging
+ import expo.modules.kotlin.Promise
+ import expo.modules.kotlin.modules.Module
+ import expo.modules.kotlin.modules.ModuleDefinition
+@@ -11,7 +10,6 @@ import expo.modules.notifications.tokens.interfaces.FirebaseTokenListener
+ private const val NEW_TOKEN_EVENT_NAME = "onDevicePushToken"
+ private const val NEW_TOKEN_EVENT_TOKEN_KEY = "devicePushToken"
+ private const val REGISTRATION_FAIL_CODE = "E_REGISTRATION_FAILED"
+-private const val UNREGISTER_FOR_NOTIFICATIONS_FAIL_CODE = "E_UNREGISTER_FOR_NOTIFICATIONS_FAILED"
+ 
+ class PushTokenModule : Module(), FirebaseTokenListener {
+   /**
+@@ -47,53 +45,19 @@ class PushTokenModule : Module(), FirebaseTokenListener {
+     }
+ 
+     /**
+-     * Fetches Firebase push token and resolves the promise.
+-     *
+-     * @param promise Promise to be resolved with the token.
++     * Device push tokens come from a push transport. This build has none, so there is no
++     * token to hand out.
+      */
+     AsyncFunction("getDevicePushTokenAsync") { promise: Promise ->
+-      val instance = getFirebaseMessagingInstance(promise) ?: return@AsyncFunction
+-      instance.token
+-        .addOnCompleteListener { task ->
+-          if (!task.isSuccessful) {
+-            val exception = task.exception
+-            promise.reject(REGISTRATION_FAIL_CODE, "Fetching the token failed: ${exception?.message ?: "unknown"}", exception)
+-            return@addOnCompleteListener
+-          }
+-          val token = task.result ?: run {
+-            promise.reject(REGISTRATION_FAIL_CODE, "Fetching the token failed. Invalid token.", null)
+-            return@addOnCompleteListener
+-          }
+-
+-          promise.resolve(token)
+-          onNewToken(token)
+-        }
+-    }
+-
+-    AsyncFunction("unregisterForNotificationsAsync") { promise: Promise ->
+-      val instance = getFirebaseMessagingInstance(promise) ?: return@AsyncFunction
+-      instance.deleteToken()
+-        .addOnCompleteListener { task ->
+-          if (!task.isSuccessful) {
+-            val exception = task.exception
+-            promise.reject(UNREGISTER_FOR_NOTIFICATIONS_FAIL_CODE, "Unregistering for notifications failed: ${exception?.message ?: "unknown"}", exception)
+-            return@addOnCompleteListener
+-          }
+-          promise.resolve(null)
+-        }
+-    }
+-  }
+-
+-  private fun getFirebaseMessagingInstance(promise: Promise): FirebaseMessaging? {
+-    return try {
+-      FirebaseMessaging.getInstance()
+-    } catch (e: IllegalStateException) {
+       promise.reject(
+         REGISTRATION_FAIL_CODE,
+-        "Unable to get Firebase Messaging instance. Did you configure `googleServicesFile` path in app config? Make sure to complete the guide at https://docs.expo.dev/push-notifications/fcm-credentials/ : ${e.message}",
+-        e
++        "This build has no push transport, so there is no device push token.",
++        null
+       )
+-      null
++    }
++
++    AsyncFunction("unregisterForNotificationsAsync") { promise: Promise ->
++      promise.resolve(null)
+     }
+   }
+ }
+diff --git a/android/src/main/java/expo/modules/notifications/topics/TopicSubscriptionModule.kt b/android/src/main/java/expo/modules/notifications/topics/TopicSubscriptionModule.kt
+deleted file mode 100644
+index 5facd2dfeb8c61db5acf3d4c69f948f34f662cf6..0000000000000000000000000000000000000000
+diff --git a/expo-module.config.json b/expo-module.config.json
+index 20e27c332fa1f4d85f319c1fdb4a9ca3e5194263..b655ef8ec8fc09b633d94569761e19140b6e3bab 100644
+--- a/expo-module.config.json
++++ b/expo-module.config.json
+@@ -1,5 +1,8 @@
+ {
+-  "platforms": ["apple", "android"],
++  "platforms": [
++    "apple",
++    "android"
++  ],
+   "apple": {
+     "modules": [
+       "BackgroundModule",
+@@ -13,7 +16,9 @@
+       "SchedulerModule",
+       "ServerRegistrationModule"
+     ],
+-    "appDelegateSubscribers": ["NotificationsAppDelegateSubscriber"]
++    "appDelegateSubscribers": [
++      "NotificationsAppDelegateSubscriber"
++    ]
+   },
+   "android": {
+     "modules": [
+@@ -29,7 +34,6 @@
+       "expo.modules.notifications.notifications.scheduling.NotificationScheduler",
+       "expo.modules.notifications.serverregistration.ServerRegistrationModule",
+       "expo.modules.notifications.tokens.PushTokenModule",
+-      "expo.modules.notifications.topics.TopicSubscriptionModule",
+       "expo.modules.notifications.notifications.channels.AndroidXNotificationsChannelsProvider"
+     ],
+     "publication": {
